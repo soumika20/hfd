@@ -39,6 +39,17 @@ const App = () => {
   const [locationPermission, setLocationPermission] = useState('prompt');
   const [showEmergencyCallMenu, setShowEmergencyCallMenu] = useState(false);
   const [selectedEmergencyType, setSelectedEmergencyType] = useState(null);
+  
+  // Live clock update
+  const [currentTime, setCurrentTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Emergency timer states
+  const [emergencyTimers, setEmergencyTimers] = useState({});
+  const [emergencyUpdates, setEmergencyUpdates] = useState([]);
 
   // STEP 1: Replace with your WeatherAPI.com API key
   const WEATHER_API_KEY = 'bf8edeaa51844f2caad151032252110';
@@ -254,11 +265,11 @@ const App = () => {
 
   useEffect(() => {
     const fetchWeather = async () => {
-      if (!WEATHER_API_KEY || WEATHER_API_KEY === 'YOUR_WEATHERAPI_KEY_HERE') {
+      if (!WEATHER_API_KEY) {
         console.warn('⚠️ Weather API key not configured. Using mock data. Get your free key at https://www.weatherapi.com/');
         setWeather({
           temp: 28,
-          condition: 'Partly Cloudy (Mock Data)',
+          condition: 'Partly Cloudy',
           humidity: 65,
           windSpeed: 12,
           feelsLike: 30
@@ -268,7 +279,7 @@ const App = () => {
             type: 'Heavy Rainfall', 
             severity: 'Moderate',
             category: 'Heavy rain',
-            headline: 'Heavy rain expected (Sample Alert)',
+            headline: 'Heavy rain expected',
             areas: 'Local area',
             effective: new Date().toISOString(),
             expires: new Date(Date.now() + 7200000).toISOString(),
@@ -317,6 +328,8 @@ const App = () => {
         }
       } catch (error) {
         console.error('Failed to fetch weather data:', error);
+        console.error('API URL was:', `https://api.weatherapi.com/v1/forecast.json?key=${WEATHER_API_KEY}&q=${userLocation.lat},${userLocation.lng}&days=1&aqi=no&alerts=yes`);
+
         setWeather({
           temp: 28,
           condition: 'Data Unavailable',
@@ -330,7 +343,7 @@ const App = () => {
 
     if (isOnline) {
       fetchWeather();
-      const interval = setInterval(fetchWeather, 600000);
+      const interval = setInterval(fetchWeather, 300000); // Update every 5 minutes
       return () => clearInterval(interval);
     } else {
       setWeather({
@@ -439,7 +452,7 @@ const App = () => {
     },
     earthquake: {
       title: 'Earthquake',
-      icon: '🏚️',
+      icon: '🏔️',
       color: 'bg-red-700',
       numbers: [
         { name: 'National Emergency', number: '112', description: 'All emergency services' },
@@ -469,7 +482,63 @@ const App = () => {
     }
   };
 
+  const startEmergencyTimer = (serviceName, number) => {
+    const timerConfig = {
+      '108': { duration: 5, service: 'Ambulance', icon: '🚑' },
+      '100': { duration: 3, service: 'Police', icon: '🚓' },
+      '101': { duration: 4, service: 'Fire Service', icon: '🚒' },
+      '112': { duration: 4, service: 'Emergency Services', icon: '🚨' }
+    };
+    
+    const config = timerConfig[number] || { duration: 5, service: serviceName, icon: '🚨' };
+    const timerId = `timer_${Date.now()}`;
+    const arrivalTime = new Date(Date.now() + config.duration * 60000);
+    
+    setEmergencyTimers(prev => ({
+      ...prev,
+      [timerId]: {
+        service: config.service,
+        icon: config.icon,
+        startTime: new Date(),
+        arrivalTime: arrivalTime,
+        duration: config.duration,
+        status: 'En Route',
+        number: number
+      }
+    }));
+    
+    // Simulate arrival after timer expires
+    setTimeout(() => {
+      setEmergencyUpdates(prev => [{
+        id: timerId,
+        service: config.service,
+        icon: config.icon,
+        message: `${config.service} has arrived at your location`,
+        time: new Date()
+      }, ...prev]);
+      
+      setEmergencyTimers(prev => {
+        const updated = { ...prev };
+        if (updated[timerId]) {
+          updated[timerId].status = 'Arrived';
+        }
+        return updated;
+      });
+    }, config.duration * 60000);
+    
+    return timerId;
+  };
+
   const makeEmergencyCall = (number) => {
+    const serviceMap = {
+      '108': 'Ambulance',
+      '100': 'Police',
+      '101': 'Fire Service',
+      '112': 'Emergency Services'
+    };
+    
+    const serviceName = serviceMap[number] || 'Emergency Service';
+    startEmergencyTimer(serviceName, number);
     window.location.href = `tel:${number}`;
   };
 
@@ -527,7 +596,10 @@ const App = () => {
     return (
       <div className="min-h-screen bg-gray-50">
         <div className="bg-white px-4 py-3 flex items-center justify-between border-b">
-          <span className="text-sm font-medium">9:41</span>
+          <div className="flex flex-col items-start">
+            <span className="text-sm font-medium">{currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+            <span className="text-[10px] text-gray-500">{currentTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+          </div>
           <span className="text-xs text-gray-500">Emergency Services</span>
           <div className="flex items-center gap-2">
             <button 
@@ -586,8 +658,8 @@ const App = () => {
                 </div>
               )}
               
-              <button 
-                onClick={() => setShowLocationDialog(false)}
+      <button
+              onClick={ () => setShowLocationDialog(false) }
                 className="w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200"
               >
                 Close
@@ -626,6 +698,14 @@ const App = () => {
 
         {weather && (
           <div className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-4 py-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs opacity-75">
+                {currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              </span>
+              <span className="text-xs opacity-75">
+                Updated: {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
             <div className="flex items-center justify-between">
               <div>
                 <div className="flex items-center gap-2">
@@ -641,10 +721,95 @@ const App = () => {
                   <span>{weather.windSpeed} km/h</span>
                 </div>
                 <div className="flex items-center gap-1 justify-end">
-                 <CloudRain className="w-4 h-4" />
+                  <CloudRain className="w-4 h-4" />
                   <span>{weather.humidity}%</span>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Active Emergency Response Timers */}
+        {Object.entries(emergencyTimers).length > 0 && (
+          <div className="mx-4 mt-4 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-2xl p-4 shadow-lg">
+            <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
+              <Activity className="w-5 h-5 animate-pulse" />
+              Active Emergency Response
+            </h3>
+            <div className="space-y-3">
+              {Object.entries(emergencyTimers).map(([id, timer]) => {
+                const timeLeft = Math.max(0, Math.floor((timer.arrivalTime - currentTime) / 1000));
+                const minutes = Math.floor(timeLeft / 60);
+                const seconds = timeLeft % 60;
+                
+                return (
+                  <div key={id} className="bg-white bg-opacity-20 backdrop-blur-sm rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{timer.icon}</span>
+                        <span className="font-bold">{timer.service}</span>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                        timer.status === 'Arrived' 
+                          ? 'bg-green-500' 
+                          : 'bg-yellow-500 text-black animate-pulse'
+                      }`}>
+                        {timer.status}
+                      </span>
+                    </div>
+                    
+                    {timer.status === 'En Route' && timeLeft > 0 ? (
+                      <div className="bg-black bg-opacity-30 rounded-lg p-3 mb-2">
+                        <div className="flex items-baseline gap-2">
+                          <div className="text-4xl font-bold tabular-nums">
+                            {minutes}:{seconds.toString().padStart(2, '0')}
+                          </div>
+                          <span className="text-sm opacity-90">min remaining</span>
+                        </div>
+                        <div className="w-full bg-white bg-opacity-30 rounded-full h-2 mt-2">
+                          <div 
+                            className="bg-white h-2 rounded-full transition-all duration-1000"
+                            style={{ 
+                              width: `${((timer.duration * 60 - timeLeft) / (timer.duration * 60)) * 100}%` 
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : timer.status === 'Arrived' ? (
+                      <div className="bg-green-500 bg-opacity-30 rounded-lg p-3 mb-2">
+                        <p className="font-medium">✓ Service has arrived at location</p>
+                      </div>
+                    ) : null}
+                    
+                    <p className="text-xs opacity-75">
+                      Called at {timer.startTime.toLocaleTimeString()}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Emergency Updates */}
+        {emergencyUpdates.length > 0 && (
+          <div className="mx-4 mt-4 bg-white rounded-2xl p-4 shadow-sm">
+            <h3 className="font-bold mb-3 flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-blue-500" />
+              Recent Updates
+            </h3>
+            <div className="space-y-2">
+              {emergencyUpdates.slice(0, 3).map(update => (
+                <div key={update.id} className="bg-green-50 rounded-lg p-3 border-l-4 border-green-500">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{update.icon}</span>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-green-900">{update.message}</p>
+                      <p className="text-xs text-green-700 mt-1">{update.time.toLocaleTimeString()}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -664,7 +829,7 @@ const App = () => {
 
           <button onClick={() => setCurrentScreen('requestForm')} className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
             <div className="flex items-center gap-3">
-              <AlertCircle className="w-5 h-5" />
+              <Edit className="w-5 h-5" />
               <span className="font-medium">Request Resources</span>
             </div>
           </button>
@@ -792,12 +957,6 @@ const App = () => {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; OpenStreetMap'
               />
-              {WEATHER_API_KEY && WEATHER_API_KEY !== 'YOUR_WEATHERAPI_KEY_HERE' && (
-                <TileLayer
-                  url={`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${WEATHER_API_KEY}`}
-                  opacity={0.6}
-                />
-              )}
               <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
                 <Popup>Your Location</Popup>
               </Marker>
@@ -1261,6 +1420,124 @@ const App = () => {
     );
   }
 
+  if (currentScreen === 'feedback') {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Feedback & Community" onBack={() => setCurrentScreen('profile')} />
+        <div className="p-4 pb-24">
+          <div className="bg-white rounded-2xl p-6 mb-4">
+            <h2 className="text-xl font-bold mb-4">Share Your Feedback</h2>
+            <p className="text-sm text-gray-600 mb-6">Help us improve R.E.A.C.H by sharing your experience</p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold mb-2">Your Name</label>
+                <input type="text" className="w-full px-4 py-3 border border-gray-300 rounded-lg" placeholder="Enter your name" />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold mb-2">Email</label>
+                <input type="email" className="w-full px-4 py-3 border border-gray-300 rounded-lg" placeholder="Enter your email" />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold mb-2">Feedback Type</label>
+                <select className="w-full px-4 py-3 border border-gray-300 rounded-lg">
+                  <option>Bug Report</option>
+                  <option>Feature Request</option>
+                  <option>General Feedback</option>
+                  <option>Appreciation</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold mb-2">Your Message</label>
+                <textarea 
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg" 
+                  rows="5" 
+                  placeholder="Tell us what you think..."
+                ></textarea>
+              </div>
+              
+              <button className="w-full bg-blue-500 text-white rounded-lg py-3 font-semibold hover:bg-blue-600">
+                Submit Feedback
+              </button>
+            </div>
+          </div>
+        </div>
+        <BottomNav currentScreen="profile" setCurrentScreen={setCurrentScreen} />
+      </div>
+    );
+  }
+
+  if (currentScreen === 'notifications') {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Notification Settings" onBack={() => setCurrentScreen('profile')} />
+        <div className="p-4 pb-24">
+          <div className="bg-white rounded-2xl p-6 mb-4">
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertCircle className="w-10 h-10 text-blue-500" />
+              </div>
+              <h2 className="text-xl font-bold mb-2">Enable Notifications</h2>
+              <p className="text-sm text-gray-600">Stay informed about emergency alerts and updates</p>
+            </div>
+            
+            <div className="space-y-4 mb-6">
+              <div className="flex items-start gap-3 p-3 bg-green-50 rounded-lg">
+                <div className="text-green-600 text-xl">✓</div>
+                <div>
+                  <p className="font-medium text-green-900">Emergency Alerts</p>
+                  <p className="text-xs text-green-700">Get notified about nearby emergencies</p>
+                </div>
+              </div>
+              
+              <div className="flex items-start gap-3 p-3 bg-blue-50 rounded-lg">
+                <div className="text-blue-600 text-xl">🔔</div>
+                <div>
+                  <p className="font-medium text-blue-900">Weather Warnings</p>
+                  <p className="text-xs text-blue-700">Receive severe weather alerts</p>
+                </div>
+              </div>
+              
+              <div className="flex items-start gap-3 p-3 bg-purple-50 rounded-lg">
+                <div className="text-purple-600 text-xl">📍</div>
+                <div>
+                  <p className="font-medium text-purple-900">Location Updates</p>
+                  <p className="text-xs text-purple-700">Updates when help is nearby</p>
+                </div>
+              </div>
+            </div>
+            
+            <button 
+              onClick={() => {
+                if ('Notification' in window) {
+                  Notification.requestPermission().then(permission => {
+                    if (permission === 'granted') {
+                      alert('Notifications enabled successfully!');
+                    } else {
+                      alert('Notification permission denied. Please enable in browser settings.');
+                    }
+                  });
+                }
+              }}
+              className="w-full bg-blue-500 text-white rounded-lg py-3 font-semibold hover:bg-blue-600 mb-3"
+            >
+              Enable Notifications
+            </button>
+            
+            <p className="text-xs text-center text-gray-500">
+              Current Status: {Notification.permission === 'granted' ? '✓ Enabled' : 
+                              Notification.permission === 'denied' ? '✗ Denied' : '⚠ Not Set'}
+            </p>
+          </div>
+        </div>
+        <BottomNav currentScreen="profile" setCurrentScreen={setCurrentScreen} />
+      </div>
+    );
+  }
+
   if (currentScreen === 'cpr') {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -1308,8 +1585,7 @@ const App = () => {
               {[
                 { label: 'Activity History', screen: 'activityHistory' },
                 { label: 'Event Codes', screen: 'eventCodes' },
-                { label: 'Feedback & Community', screen: null },
-                { label: 'Redeem Gifts', screen: null }
+                { label: 'Feedback', screen: 'feedback' },
               ].map((item, i) => (
                 <button key={i} onClick={() => item.screen && setCurrentScreen(item.screen)} className="w-full px-4 py-4 flex justify-between items-center border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors">
                   <span className="text-gray-700">{item.label}</span>
@@ -1321,9 +1597,13 @@ const App = () => {
           <div className="mb-6">
             <h3 className="font-bold text-lg mb-3 px-2">Settings</h3>
             <div className="bg-white rounded-2xl overflow-hidden">
-              {['Notification', 'App Customization', 'Device Integration', 'Account Management', 'Legal and Policies'].map((item, i) => (
-                <button key={i} className="w-full px-4 py-4 flex justify-between items-center border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors">
-                  <span className="text-gray-700">{item}</span>
+              {[
+                { label: 'Notification', screen: 'notifications' },
+                { label: 'Account Management', screen: null },
+                { label: 'Legal and Policies', screen: null }
+              ].map((item, i) => (
+                <button key={i} onClick={() => item.screen && setCurrentScreen(item.screen)} className="w-full px-4 py-4 flex justify-between items-center border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors">
+                  <span className="text-gray-700">{item.label}</span>
                   <ChevronRight className="w-5 h-5 text-gray-400" />
                 </button>
               ))}
@@ -1344,7 +1624,7 @@ const App = () => {
 const Header = ({ title, onBack }) => (
   <div className="bg-white px-4 py-3 border-b sticky top-0 z-10">
     <div className="flex items-center justify-between">
-      {onBack ? <button onClick={onBack} className="text-blue-500">← Back</button> : <span className="text-sm">9:41</span>}
+      {onBack ? <button onClick={onBack} className="text-blue-500">← Back</button> : <span className="text-sm">{new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>}
       <span className="font-semibold">{title}</span>
       <div className="w-12"></div>
     </div>
@@ -1357,12 +1637,12 @@ const BottomNav = ({ currentScreen, setCurrentScreen }) => (
       <Home className="w-6 h-6" />
     </button>
     <button onClick={() => setCurrentScreen('events')} className={`flex flex-col items-center ${currentScreen === 'events' || currentScreen === 'eventDetail' ? 'text-blue-500' : 'text-gray-400'}`}>
-      <Edit className="w-6 h-6" />
+      <AlertCircle className="w-6 h-6" />
     </button>
     <button onClick={() => setCurrentScreen('map')} className={`flex flex-col items-center ${currentScreen === 'map' || currentScreen === 'navigation' ? 'text-blue-500' : 'text-gray-400'}`}>
       <Menu className="w-6 h-6" />
     </button>
-    <button onClick={() => setCurrentScreen('profile')} className={`flex flex-col items-center ${currentScreen === 'profile' || currentScreen === 'cpr' || currentScreen === 'activityHistory' || currentScreen === 'eventCodes' ? 'text-blue-500' : 'text-gray-400'}`}>
+    <button onClick={() => setCurrentScreen('profile')} className={`flex flex-col items-center ${currentScreen === 'profile' || currentScreen === 'cpr' || currentScreen === 'activityHistory' || currentScreen === 'eventCodes' || currentScreen === 'feedback' || currentScreen === 'notifications' ? 'text-blue-500' : 'text-gray-400'}`}>
       <User className="w-6 h-6" />
     </button>
   </div>
