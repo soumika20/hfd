@@ -815,17 +815,27 @@ const App = () => {
         )}
 
         <div className="p-4 space-y-4 pb-24">
-          <button onClick={() => document.getElementById('mediaInput').click()} className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
+          <button 
+            onClick={() => document.getElementById('mediaInput').click()} 
+            className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors"
+          >
             <div className="flex items-center gap-3">
               <Image className="w-5 h-5" />
-              <span className="font-medium">Add media</span>
+              <span className="font-medium">Send Media to Dispatcher</span>
             </div>
           </button>
-          <input id="mediaInput" type="file" accept="image/*,video/*" multiple className="hidden" onChange={(e) => {
-            const files = Array.from(e.target.files);
-            setMediaFiles(prev => [...prev, ...files]);
-            alert(`${files.length} file(s) added successfully!`);
-          }} />
+          <input 
+            id="mediaInput" 
+            type="file" 
+            accept="image/*,video/*" 
+            multiple 
+            className="hidden" 
+            onChange={(e) => {
+              const files = Array.from(e.target.files);
+              setMediaFiles(prev => [...prev, ...files]);
+              alert(`${files.length} file(s) sent to dispatcher successfully!`);
+            }} 
+          />
 
           <button onClick={() => setCurrentScreen('requestForm')} className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
             <div className="flex items-center gap-3">
@@ -1335,6 +1345,30 @@ const App = () => {
                 <Navigation className="w-5 h-5" />
               </button>
             </div>
+          </div>
+          ¸
+          <div className="mt-4">
+            <button 
+              onClick={() => document.getElementById('eventMediaInput').click()} 
+              className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <Image className="w-5 h-5" />
+                <span className="font-medium">Add Media</span>
+              </div>
+            </button>
+            <input 
+              id="eventMediaInput" 
+              type="file" 
+              accept="image/*,video/*" 
+              multiple 
+              className="hidden" 
+              onChange={(e) => {
+                const files = Array.from(e.target.files);
+                setMediaFiles(prev => [...prev, ...files]);
+                alert(`${files.length} file(s) sent successfully!`);
+              }} 
+            />
           </div>
           <div className="bg-white rounded-2xl p-4">
             <div className="flex justify-between items-center mb-3">
