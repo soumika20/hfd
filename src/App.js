@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { Home, Edit, Menu, User, ChevronRight, MapPin, Phone, Video, Camera, Image, AlertCircle, Navigation, Heart, Cloud, CloudRain, Wind, Thermometer, Activity, Wifi, WifiOff, Radio, Users } from 'lucide-react';
+import { Home, Edit, Menu, User, ChevronRight, MapPin, Phone, Video, Camera, Image, AlertCircle, Navigation, Heart, Cloud, CloudRain, Wind, Thermometer, Activity, Wifi, WifiOff, Radio, Users,PlusCircle, ChevronLeft, Upload } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 
 // Fix for default marker icons in Leaflet
@@ -39,8 +39,78 @@ const App = () => {
   const [locationPermission, setLocationPermission] = useState('prompt');
   const [showEmergencyCallMenu, setShowEmergencyCallMenu] = useState(false);
   const [selectedEmergencyType, setSelectedEmergencyType] = useState(null);
-  
-  // Live clock update
+  const [createdEvents, setCreatedEvents] = useState([]);
+  const [eventVolunteers, setEventVolunteers] = useState({});
+  const [userRespondingTo, setUserRespondingTo] = useState([]);
+  const [userActivities, setUserActivities] = useState([]);
+  const [eventMediaFiles, setEventMediaFiles] = useState([]);
+  const [newEventForm, setNewEventForm] = useState({
+  incidentType: '',
+  location: '',
+  volunteersNeeded: 1,
+  suppliesNeeded: '',
+  emergencyServiceStatus: 'Not Arrived',
+  mediaFiles: []
+});
+const [showCallEndDialog, setShowCallEndDialog] = useState(false);
+const [pendingTimerCall, setPendingTimerCall] = useState(null);
+const [routeCoordinates, setRouteCoordinates] = useState([]);
+
+const fetchRoute = async (startLat, startLng, endLat, endLng) => {
+  try {
+    // Using OpenRouteService API (free, requires API key from https://openrouteservice.org/)
+    const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFlYmZjZTI5NmYwYTQyN2RhMDdhMzIzZTllMzI4YTQ5IiwiaCI6Im11cm11cjY0In0='; // Get free key at openrouteservice.org
+    
+    const response = await fetch(
+      `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${ORS_API_KEY}&start=${startLng},${startLat}&end=${endLng},${endLat}`
+    );
+    const data = await response.json();
+    
+    if (data.features && data.features[0]) {
+      const coords = data.features[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
+      return coords;
+    }
+  } catch (error) {
+    console.error('Route fetch failed, using direct line:', error);
+    // Fallback to direct line
+    return [
+      [startLat, startLng],
+      [endLat, endLng]
+    ];
+  }
+  return [[startLat, startLng], [endLat, endLng]];
+};
+
+// Add state for nearby resources
+const [nearbyResources, setNearbyResources] = useState([]);
+// Fetch route when navigation screen is active
+  useEffect(() => {
+    if (currentScreen === 'navigation' && nearbyResources.length > 0) {
+      const destination = nearbyResources[0];
+      const getRoute = async () => {
+        const route = await fetchRoute(
+          userLocation.lat, 
+          userLocation.lng, 
+          destination.lat, 
+          destination.lng
+        );
+        setRouteCoordinates(route);
+      };
+      getRoute();
+    }
+  }, [currentScreen, nearbyResources, userLocation]);
+
+  if (currentScreen === 'navigation') {
+    const destination = nearbyResources[0];
+    
+    const routePath = routeCoordinates.length > 0 ? routeCoordinates : [
+      [userLocation.lat, userLocation.lng],
+      [destination.lat, destination.lng]
+    ];
+}
+
+
+// Live clock update
   const [currentTime, setCurrentTime] = useState(new Date());
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -54,6 +124,13 @@ const App = () => {
   // STEP 1: Replace with your WeatherAPI.com API key
   const WEATHER_API_KEY = 'bf8edeaa51844f2caad151032252110';
 
+  const events = [
+    { id: 1, type: 'CVX - Cardiac Event', time: '2:00 - 3:00 PM', location: 'Nearby Street A', color: '#DC2626', lat: userLocation.lat + 0.005, lng: userLocation.lng + 0.003 },
+    { id: 2, type: 'MVA - Motor Vehicle Accident', time: '1:30 - 2:30 PM', location: 'Nearby Street B', color: '#EA580C', lat: userLocation.lat - 0.004, lng: userLocation.lng + 0.006 },
+    { id: 3, type: 'Fall Injury', time: '1:00 - 2:00 PM', location: 'Nearby Plaza', color: '#F59E0B', lat: userLocation.lat + 0.007, lng: userLocation.lng - 0.004 },
+    { id: 4, type: 'Respiratory Distress', time: '12:15 PM', location: 'Local Park', color: '#0891B2', lat: userLocation.lat - 0.003, lng: userLocation.lng - 0.005 },
+    { id: 5, type: 'Stroke - CVA', time: '11:45 AM', location: 'Community Center', color: '#DC2626', lat: userLocation.lat + 0.002, lng: userLocation.lng + 0.008 }
+  ];
 
   // Mesh Network Manager
   const MeshNetworkManager = useCallback(() => {
@@ -355,6 +432,30 @@ const App = () => {
       });
     }
   }, [userLocation, isOnline, WEATHER_API_KEY]);
+// Check for nearby events and send notifications
+  useEffect(() => {
+    const checkNearbyEvents = () => {
+      if (Notification.permission !== 'granted') return;
+      
+      const allEvents = [...events, ...createdEvents];
+      allEvents.forEach(event => {
+        const distance = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, event.lat, event.lng));
+        if (distance <= 1) {
+          new Notification('Nearby Emergency Event', {
+            body: `${event.type} - ${distance} km away. ${eventVolunteers[event.id] || 0} volunteers responding.`,
+            icon: '/emergency-icon.png',
+            tag: `event-${event.id}` // Prevent duplicate notifications
+          });
+        }
+      });
+    };
+
+    if (locationPermission === 'granted') {
+      checkNearbyEvents();
+      const interval = setInterval(checkNearbyEvents, 60000); // Check every minute
+      return () => clearInterval(interval);
+    }
+  }, [userLocation, events, createdEvents, eventVolunteers, locationPermission]);
 
   useEffect(() => {
     if (currentScreen === 'splash') {
@@ -442,7 +543,7 @@ const App = () => {
     },
     disaster: {
       title: 'Natural Disaster',
-      icon: '🌊',
+      icon: '🏔️',
       color: 'bg-purple-600',
       numbers: [
         { name: 'National Emergency', number: '112', description: 'All emergency services' },
@@ -450,16 +551,7 @@ const App = () => {
         { name: 'NDRF', number: '011-24363260', description: 'National disaster response' }
       ]
     },
-    earthquake: {
-      title: 'Earthquake',
-      icon: '🏔️',
-      color: 'bg-red-700',
-      numbers: [
-        { name: 'National Emergency', number: '112', description: 'All emergency services' },
-        { name: 'Disaster Helpline', number: '1078', description: 'Disaster management' },
-        { name: 'NDRF', number: '011-24363260', description: 'Rescue operations' }
-      ]
-    },
+
     flood: {
       title: 'Flood Emergency',
       icon: '🌊',
@@ -502,7 +594,7 @@ const App = () => {
         startTime: new Date(),
         arrivalTime: arrivalTime,
         duration: config.duration,
-        status: 'En Route',
+        status: 'On Route',
         number: number
       }
     }));
@@ -539,23 +631,26 @@ const App = () => {
     
     const serviceName = serviceMap[number] || 'Emergency Service';
     startEmergencyTimer(serviceName, number);
+    setShowCallEndDialog(true);
     window.location.href = `tel:${number}`;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && pendingTimerCall) {
+        setShowCallEndDialog(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
   };
 
-  const events = [
-    { id: 1, type: 'CVX - Cardiac Event', time: '2:00 - 3:00 PM', location: 'Greater Kailash, New Delhi', color: '#DC2626', lat: 28.5494, lng: 77.2381 },
-    { id: 2, type: 'MVA - Motor Vehicle Accident', time: '1:30 - 2:30 PM', location: 'MG Road, Bangalore', color: '#EA580C', lat: 12.9756, lng: 77.6069 },
-    { id: 3, type: 'Fall Injury', time: '1:00 - 2:00 PM', location: 'Andheri West, Mumbai', color: '#F59E0B', lat: 19.1136, lng: 72.8697 },
-    { id: 4, type: 'Respiratory Distress', time: '12:15 PM', location: 'Park Street, Kolkata', color: '#0891B2', lat: 22.5544, lng: 88.3516 },
-    { id: 5, type: 'Stroke - CVA', time: '11:45 AM', location: 'Jubilee Hills, Hyderabad', color: '#DC2626', lat: 17.4305, lng: 78.4078 }
-  ];
+  const confirmCallEnded = () => {
+    if (pendingTimerCall) {
+      startEmergencyTimer(pendingTimerCall.serviceName, pendingTimerCall.number);
+      setShowCallEndDialog(false);
+      setPendingTimerCall(null);
+    }
+  };
 
-  const nearbyResources = [
-    { id: 1, name: 'Apollo Hospital', distance: 1.2, type: 'hospital', lat: userLocation.lat + 0.01, lng: userLocation.lng + 0.01, status: 'Available' },
-    { id: 2, name: 'Police Station', distance: 0.8, type: 'police', lat: userLocation.lat - 0.008, lng: userLocation.lng + 0.008, status: 'Available' },
-    { id: 3, name: 'First Aid Center', distance: 0.3, type: 'firstaid', lat: userLocation.lat + 0.003, lng: userLocation.lng - 0.003, status: 'Available' },
-    { id: 4, name: 'Ambulance Service', distance: 2.1, type: 'ambulance', lat: userLocation.lat + 0.02, lng: userLocation.lng - 0.015, status: 'En-route' }
-  ];
+
 
   const activities = [
     { id: 1, type: 'CVX', desc: 'Kannankudy Block, Varkala Jamath, Masjid...', time: 'Attended at 2:22 PM', date: '12.08.2024' },
@@ -609,16 +704,15 @@ const App = () => {
               <MapPin className={`w-4 h-4 ${locationPermission === 'granted' ? 'text-green-500' : locationPermission === 'denied' ? 'text-red-500' : 'text-gray-400'}`} />
             </button>
             
-            {isOnline ? (
+		{isOnline ? (
               <Wifi className="w-4 h-4 text-green-500" />
             ) : meshStatus === 'connected' ? (
               <Radio className="w-4 h-4 text-blue-500 animate-pulse" title="Mesh Network Active" />
             ) : (
               <WifiOff className="w-4 h-4 text-red-500" />
             )}
-            <div className="w-4 h-3 border border-black rounded-sm"></div>
-          </div>
-        </div>
+          </div>        
+	</div>
 
         {showLocationDialog && (
           <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
@@ -758,7 +852,7 @@ const App = () => {
                       </span>
                     </div>
                     
-                    {timer.status === 'En Route' && timeLeft > 0 ? (
+                    {timer.status === 'On Route' && timeLeft > 0 ? (
                       <div className="bg-black bg-opacity-30 rounded-lg p-3 mb-2">
                         <div className="flex items-baseline gap-2">
                           <div className="text-4xl font-bold tabular-nums">
@@ -815,27 +909,12 @@ const App = () => {
         )}
 
         <div className="p-4 space-y-4 pb-24">
-          <button 
-            onClick={() => document.getElementById('mediaInput').click()} 
-            className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors"
-          >
+          <button onClick={() => setCurrentScreen('createEvent')} className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
             <div className="flex items-center gap-3">
-              <Image className="w-5 h-5" />
-              <span className="font-medium">Send Media to Dispatcher</span>
+              <PlusCircle className="w-5 h-5" />
+              <span className="font-medium">Add Event</span>
             </div>
           </button>
-          <input 
-            id="mediaInput" 
-            type="file" 
-            accept="image/*,video/*" 
-            multiple 
-            className="hidden" 
-            onChange={(e) => {
-              const files = Array.from(e.target.files);
-              setMediaFiles(prev => [...prev, ...files]);
-              alert(`${files.length} file(s) sent to dispatcher successfully!`);
-            }} 
-          />
 
           <button onClick={() => setCurrentScreen('requestForm')} className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
             <div className="flex items-center gap-3">
@@ -850,6 +929,28 @@ const App = () => {
               <span className="font-medium">Emergency Call</span>
             </div>
           </button>
+{showCallEndDialog && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
+                <h3 className="text-lg font-bold mb-4">Emergency Call</h3>
+                <p className="text-sm text-gray-600 mb-6">
+                  Has your emergency call ended? We'll start tracking the response time.
+                </p>
+                <button
+                  onClick={confirmCallEnded}
+                  className="w-full bg-blue-500 text-white py-3 rounded-lg font-medium mb-2 hover:bg-blue-600"
+                >
+                  Call Ended - Start Timer
+                </button>
+                <button
+                  onClick={() => setShowCallEndDialog(false)}
+                  className="w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200"
+                >
+                  Still on Call
+                </button>
+              </div>
+            </div>
+          )}
 
           {showEmergencyCallMenu && (
             <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end justify-center">
@@ -878,12 +979,6 @@ const App = () => {
             </div>
           )}
 
-          <button className="w-full bg-green-600 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-green-700 transition-colors">
-            <div className="flex items-center gap-3">
-              <Video className="w-5 h-5" />
-              <span className="font-medium">Video Call</span>
-            </div>
-          </button>
 
           {mediaFiles.length > 0 && (
             <div className="bg-white rounded-2xl p-4">
@@ -1110,12 +1205,11 @@ const App = () => {
     );
   }
 
-  if (currentScreen === 'navigation') {
+if (currentScreen === 'navigation') {
     const destination = nearbyResources[0];
-    const routePath = [
+    
+    const routePath = routeCoordinates.length > 0 ? routeCoordinates : [
       [userLocation.lat, userLocation.lng],
-      [userLocation.lat + 0.003, userLocation.lng + 0.005],
-      [userLocation.lat + 0.007, userLocation.lng + 0.009],
       [destination.lat, destination.lng]
     ];
     
@@ -1152,7 +1246,7 @@ const App = () => {
             </div>
             <div className="mt-3 bg-green-50 rounded-lg px-3 py-2 flex items-center justify-center gap-2">
               <Activity className="w-4 h-4 text-green-600" />
-              <span className="text-sm text-green-700 font-medium">En Route to {destination.name}</span>
+              <span className="text-sm text-green-700 font-medium">On Route to {destination.name}</span>
             </div>
           </div>
         </div>
@@ -1172,21 +1266,26 @@ const App = () => {
               <div className="absolute left-3 top-2.5 text-gray-400">🔍</div>
             </div>
           </div>
-          <div className="space-y-3 pb-24">
-            {activities.map(activity => (
-              <div key={activity.id} className="bg-red-500 text-white rounded-2xl p-4">
-                <div className="flex justify-between items-start mb-2">
-                  <h3 className="font-bold text-lg">{activity.type}</h3>
-                  <span className="bg-blue-500 px-3 py-1 rounded-full text-xs">See more</span>
-                </div>
-                <p className="text-sm opacity-90 mb-2">{activity.desc}</p>
-                <div className="flex justify-between items-center text-xs">
-                  <span>{activity.time}</span>
-                  <span>{activity.date}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+<div className="space-y-3 pb-24">
+  {userActivities.length > 0 ? userActivities.map(activity => (
+    <div key={activity.id} className="bg-red-500 text-white rounded-2xl p-4">
+      <div className="flex justify-between items-start mb-2">
+       	<h3 className="font-bold text-lg">{activity.type}</h3>
+       	<span className="bg-blue-500 px-3 py-1 rounded-full text-xs">See more</span>
+      	</div>
+      	<p className="text-sm opacity-90 mb-2">{activity.desc}</p>
+      	<div className="flex justify-between items-center text-xs">
+        	<span>{activity.time}</span>
+        	<span>{activity.date}</span>
+      	</div>
+    	</div>
+ 	 )) : (
+    	<div className="bg-white rounded-2xl p-6 text-center">
+      	<p className="text-gray-500">No activity history yet</p>
+      	<p className="text-sm text-gray-400 mt-2">Your volunteer responses and created events 	will appear here</p>
+   	 </div>
+  	)}
+	</div>
         </div>
         <BottomNav currentScreen="profile" setCurrentScreen={setCurrentScreen} />
       </div>
@@ -1237,10 +1336,224 @@ const App = () => {
     );
   }
 
+  if (currentScreen === 'createEvent') {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Create Event" onBack={() => setCurrentScreen('home')} />
+        <div className="p-4 space-y-4 pb-24">
+          <div className="bg-white rounded-2xl p-4 space-y-4">
+            <div>
+              <label className="block text-sm font-semibold mb-2">Incident Type</label>
+              <select 
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                value={newEventForm.incidentType}
+                onChange={(e) => setNewEventForm({...newEventForm, incidentType: e.target.value})}
+              >
+                <option value="">Select incident type</option>
+                <option value="Medical Emergency">Medical Emergency</option>
+                <option value="Fire">Fire</option>
+                <option value="Accident">Accident</option>
+                <option value="Natural Disaster">Natural Disaster</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-semibold mb-2">Location</label>
+              <input 
+                type="text" 
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg" 
+                placeholder="Enter location" 
+                value={newEventForm.location || `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`}
+                onChange={(e) => setNewEventForm({...newEventForm, location: e.target.value})}
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-semibold mb-2">Number of Volunteers Required</label>
+              <input 
+                type="number" 
+                min="1"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg" 
+                placeholder="Enter number" 
+                value={newEventForm.volunteersNeeded}
+                onChange={(e) => setNewEventForm({...newEventForm, volunteersNeeded: parseInt(e.target.value)})}
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-semibold mb-2">Emergency Supplies Needed</label>
+              <textarea 
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg" 
+                rows="3"
+                placeholder="List required supplies (e.g., first aid kit, water, blankets)"
+                value={newEventForm.suppliesNeeded}
+                onChange={(e) => setNewEventForm({...newEventForm, suppliesNeeded: e.target.value})}
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-semibold mb-2">Emergency Service Status</label>
+              <div className="space-y-2">
+                {['Not Arrived', 'On Route', 'Arrived'].map(status => (
+                  <label key={status} className="flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="radio"
+                      name="serviceStatus"
+                      value={status}
+                      checked={newEventForm.emergencyServiceStatus === status}
+                      onChange={(e) => setNewEventForm({...newEventForm, emergencyServiceStatus: e.target.value})}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm">{status}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-semibold mb-2">Upload Media</label>
+              <div className="space-y-2">
+                <button 
+                  onClick={() => document.getElementById('eventImageInput').click()}
+                  className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
+                >
+                  <Camera className="w-5 h-5" />
+                  <span>Add Photos</span>
+                </button>
+                <input 
+                  id="eventImageInput" 
+                  type="file" 
+                  accept="image/*" 
+                  multiple 
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files);
+                    setNewEventForm({
+                      ...newEventForm, 
+                      mediaFiles: [...newEventForm.mediaFiles, ...files.map(f => ({type: 'image', file: f}))]
+                    });
+                  }}
+                />
+                
+                <button 
+                  onClick={() => document.getElementById('eventVideoInput').click()}
+                  className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
+                >
+                  <Video className="w-5 h-5" />
+                  <span>Add Videos</span>
+                </button>
+                <input 
+                  id="eventVideoInput" 
+                  type="file" 
+                  accept="video/*" 
+                  multiple 
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files);
+                    setNewEventForm({
+                      ...newEventForm, 
+                      mediaFiles: [...newEventForm.mediaFiles, ...files.map(f => ({type: 'video', file: f}))]
+                    });
+                  }}
+                />
+              </div>
+              
+              {newEventForm.mediaFiles.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-sm font-medium mb-2">Uploaded: {newEventForm.mediaFiles.length} file(s)</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {newEventForm.mediaFiles.map((media, idx) => (
+                      <div key={idx} className="aspect-square bg-gray-200 rounded-lg flex items-center justify-center relative">
+                        {media.type === 'image' ? <Camera className="w-6 h-6 text-gray-400" /> : <Video className="w-6 h-6 text-gray-400" />}
+                        <button 
+                          onClick={() => {
+                            setNewEventForm({
+                              ...newEventForm,
+                              mediaFiles: newEventForm.mediaFiles.filter((_, i) => i !== idx)
+                            });
+                          }}
+                          className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <button 
+onClick={() => {
+  if (!newEventForm.incidentType) {
+    alert('Please select an incident type');
+    return;
+  }
+  const newEvent = {
+    id: Date.now(),
+    type: newEventForm.incidentType,
+    location: newEventForm.location || `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`,
+    volunteersNeeded: newEventForm.volunteersNeeded,
+    suppliesNeeded: newEventForm.suppliesNeeded,
+    emergencyServiceStatus: newEventForm.emergencyServiceStatus,
+    mediaFiles: newEventForm.mediaFiles,
+    time: new Date().toLocaleTimeString(),
+    color: '#DC2626',
+    lat: userLocation.lat + (Math.random() - 0.5) * 0.02,
+    lng: userLocation.lng + (Math.random() - 0.5) * 0.02
+  };
+  setCreatedEvents([...createdEvents, newEvent]);
+  setEventVolunteers({...eventVolunteers, [newEvent.id]: 0});
+  
+  // Add to activity history
+  setUserActivities(prev => [{
+    id: Date.now(),
+    type: 'Event Created',
+    eventType: newEvent.type,
+    desc: `Created ${newEvent.type} event at ${newEvent.location}`,
+    time: `Created at ${new Date().toLocaleTimeString()}`,
+    date: new Date().toLocaleDateString('en-GB')
+  }, ...prev]);
+                
+                // Request notification permission for nearby events
+                if (Notification.permission === 'default') {
+                  Notification.requestPermission().then(permission => {
+                    if (permission === 'granted') {
+                      new Notification('Event Created', {
+                        body: 'Your event has been created successfully!'
+                      });
+                    }
+                  });
+                }
+                
+                alert('Event created successfully!');
+                setNewEventForm({
+                  incidentType: '',
+                  location: '',
+                  volunteersNeeded: 1,
+                  suppliesNeeded: '',
+                  emergencyServiceStatus: 'Not Arrived',
+                  mediaFiles: []
+                });
+                setCurrentScreen('events');
+              }}
+              className="w-full bg-blue-500 text-white rounded-lg py-3 font-semibold hover:bg-blue-600"
+            >
+              Create Event
+            </button>
+          </div>
+        </div>
+        <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
+      </div>
+    );
+  }
+
+
   if (currentScreen === 'events') {
     return (
       <div className="min-h-screen bg-gray-50">
-        <Header title="Active Events" />
+        <Header title="Active Events" onBack={() => setCurrentScreen('home')} />
         <div className="h-64">
           <MapContainer 
             center={[userLocation.lat, userLocation.lng]} 
@@ -1251,8 +1564,13 @@ const App = () => {
             <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
               <Popup>Your Location</Popup>
             </Marker>
-            {events.map(event => (
-              <Marker 
+	{[...events, ...createdEvents]
+        	      .filter(event => {
+                	const distance = parseFloat(calculateDistance(userLocation.lat, 	userLocation.lng, event.lat, event.lng));
+                return distance <= 1;
+              })
+              .map(event => (
+              <Marker
                 key={event.id} 
                 position={[event.lat, event.lng]} 
                 icon={createCustomIcon(event.color)}
@@ -1272,10 +1590,19 @@ const App = () => {
             ))}
           </MapContainer>
         </div>
-        <div className="p-4 space-y-3 pb-24">
-          <h3 className="font-bold text-lg">All Active Events</h3>
-          {events.map(event => (
-            <div key={event.id} onClick={() => { setSelectedEvent(event); setCurrentScreen('eventDetail'); }} className="rounded-2xl p-4 text-white cursor-pointer hover:opacity-90 transition-opacity" style={{ backgroundColor: event.color }}>
+<div className="p-4 space-y-3 pb-24">
+          <h3 className="font-bold text-lg">Active Events Within 1km</h3>
+          {[...events, ...createdEvents]
+            .filter(event => {
+              const distance = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, event.lat, event.lng));
+              return distance <= 1;
+            })
+            .sort((a, b) => {
+              const distA = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, a.lat, a.lng));
+              const distB = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, b.lat, b.lng));
+              return distA - distB;
+            })
+            .map(event => (            <div key={event.id} onClick={() => { setSelectedEvent(event); setCurrentScreen('eventDetail'); }} className="rounded-2xl p-4 text-white cursor-pointer hover:opacity-90 transition-opacity" style={{ backgroundColor: event.color }}>
               <div className="flex justify-between items-start mb-2">
                 <h3 className="font-bold text-lg">{event.type}</h3>
                 <button className="bg-white bg-opacity-20 px-3 py-1 rounded-full text-xs">View Details</button>
@@ -1313,14 +1640,17 @@ const App = () => {
             <Marker position={[selectedEvent.lat, selectedEvent.lng]} icon={createCustomIcon(selectedEvent.color)}>
               <Popup>{selectedEvent.type}</Popup>
             </Marker>
-            <Polyline 
+		<Polyline 
               positions={[
                 [userLocation.lat, userLocation.lng],
+                [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.3, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.3],
+                [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.7, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.7],
                 [selectedEvent.lat, selectedEvent.lng]
               ]} 
-              color="#6366F1" 
-              dashArray="10, 10"
+              color="#3B82F6" 
+              weight={4}
             />
+
           </MapContainer>
         </div>
         <div className="p-4 space-y-4 pb-24">
@@ -1334,8 +1664,46 @@ const App = () => {
             <p className="text-sm mb-3">
               Distance: {calculateDistance(userLocation.lat, userLocation.lng, selectedEvent.lat, selectedEvent.lng)} km away
             </p>
+<div className="bg-white rounded-lg p-3 mb-3">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-blue-500" />
+                <span className="font-bold text-gray-900">
+                  {eventVolunteers[selectedEvent.id] || 0} Volunteer{(eventVolunteers[selectedEvent.id] || 0) !== 1 ? 's' : ''} Responding
+                </span>
+              </div>
+            </div>
             <div className="flex gap-2">
-              <button className="bg-white text-red-600 px-4 py-2 rounded-lg font-medium flex-1">I am responding</button>
+              <button 
+	onClick={() => {
+	  if (!userRespondingTo.includes(selectedEvent.id)) {
+    	setEventVolunteers({
+      	...eventVolunteers,
+      	[selectedEvent.id]: (eventVolunteers[selectedEvent.id] || 0) + 1
+    	});
+    	setUserRespondingTo([...userRespondingTo, selectedEvent.id]);
+    
+   	 // Add to activity history
+    	setUserActivities(prev => [{
+      	id: Date.now(),
+      	type: 'Volunteer Response',
+      	eventType: selectedEvent.type,
+      	desc: `Volunteered for ${selectedEvent.type} at ${selectedEvent.location}`,
+      	time: `Responded at ${new Date().toLocaleTimeString()}`,
+      	date: new Date().toLocaleDateString('en-GB')
+    	}, ...prev]);
+ 	 }
+}}                
+		disabled={userRespondingTo.includes(selectedEvent.id)}
+                className={`${
+                  userRespondingTo.includes(selectedEvent.id) 
+                    ? 'bg-green-500 text-white' 
+                    : 'bg-white text-red-600'
+                } px-4 py-2 rounded-lg font-medium flex-1 ${
+                  userRespondingTo.includes(selectedEvent.id) ? 'cursor-not-allowed' : 'hover:opacity-90'
+                }`}
+              >
+                {userRespondingTo.includes(selectedEvent.id) ? '✓ Responding' : 'I am responding'}
+              </button>
               <button 
                 className="bg-white bg-opacity-20 p-2 rounded-lg"
                 onClick={() => {
@@ -1345,30 +1713,6 @@ const App = () => {
                 <Navigation className="w-5 h-5" />
               </button>
             </div>
-          </div>
-          ¸
-          <div className="mt-4">
-            <button 
-              onClick={() => document.getElementById('eventMediaInput').click()} 
-              className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <Image className="w-5 h-5" />
-                <span className="font-medium">Add Media</span>
-              </div>
-            </button>
-            <input 
-              id="eventMediaInput" 
-              type="file" 
-              accept="image/*,video/*" 
-              multiple 
-              className="hidden" 
-              onChange={(e) => {
-                const files = Array.from(e.target.files);
-                setMediaFiles(prev => [...prev, ...files]);
-                alert(`${files.length} file(s) sent successfully!`);
-              }} 
-            />
           </div>
           <div className="bg-white rounded-2xl p-4">
             <div className="flex justify-between items-center mb-3">
@@ -1393,7 +1737,7 @@ const App = () => {
   if (currentScreen === 'map') {
     return (
       <div className="min-h-screen bg-gray-50">
-        <Header title="Nearby Resources" />
+        <Header title="Nearby Resources" onBack={() => setCurrentScreen('home')}/>
         <div className="h-96">
           <MapContainer 
             center={[userLocation.lat, userLocation.lng]} 
@@ -1595,12 +1939,136 @@ const App = () => {
               ))}
             </div>
           </div>
-          <div className="bg-white rounded-2xl p-6">
-            <h3 className="font-semibold mb-3">Hand Position</h3>
-            <div className="bg-blue-50 rounded-xl h-48 flex items-center justify-center">
-              <p className="text-gray-500">CPR Illustration</p>
+<div className="bg-white rounded-2xl p-6">
+            <h3 className="font-semibold mb-3">Hand Position & Technique</h3>
+            
+            {/* Image 1: Rescue breathing */}
+            <div className="mb-4">
+              <div className="bg-blue-50 rounded-xl overflow-hidden">
+                <img
+                  src="/Rescue_breathing.png"
+                  alt="CPR Hand Position"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 1: Hand Placement</p>
+              <p className="text-xs text-gray-600 mt-1">Place the heel of one hand on the center of the chest (lower half of breastbone). Place your other hand on top and interlock fingers.</p>
             </div>
-            <p className="text-sm text-gray-600 mt-3">Body position: Shoulders over hands, elbows locked. Rate: 100-120/min. Depth: At least 2 inches.</p>
+
+            {/* Image 2: Hand Position */}
+            <div className="mb-4">
+              <div className="bg-blue-50 rounded-xl overflow-hidden">
+                <img
+                  src="/Hand_positioning.png"
+                  alt="CPR Hand Position"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 2: Body Position</p>
+              <p className="text-xs text-gray-600 mt-1">Position shoulders directly over hands. Keep elbows locked and arms straight.</p>
+            </div>
+
+            {/* Image 3: Compression Technique */}
+            <div className="mb-4">
+              <div className="bg-blue-50 rounded-xl overflow-hidden">
+                <img
+                  src="/CPR.png"
+                  alt="CPR Compression"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 3: Compression</p>
+              <p className="text-xs text-gray-600 mt-1">Push hard and fast. Compress at least 2 inches deep at a rate of 100-120 compressions per minute.</p>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mt-4">
+              <p className="text-sm font-semibold text-red-900">Key Points:</p>
+              <ul className="text-xs text-red-800 mt-2 space-y-1">
+                <li>• Allow chest to recoil completely between compressions</li>
+                <li>• Minimize interruptions in compressions</li>
+                <li>• Continue until help arrives or person shows signs of life</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <BottomNav currentScreen="profile" setCurrentScreen={setCurrentScreen} />
+      </div>
+    );
+  }
+if (currentScreen === 'choking') {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Choking Relief" onBack={() => setCurrentScreen('profile')} />
+        <div className="p-4 space-y-6 pb-24">
+          <div className="bg-white rounded-2xl p-6">
+            <h2 className="font-bold text-xl mb-4">Heimlich Maneuver Steps</h2>
+            <div className="space-y-4">
+              {[
+                'Stand behind the person and wrap your arms around their waist',
+                'Make a fist with one hand and place it above the navel',
+                'Grasp your fist with the other hand',
+                'Give quick, upward thrusts into the abdomen',
+                'Repeat until the object is dislodged',
+                'Call emergency services if unsuccessful'
+              ].map((text, i) => (
+                <div key={i} className="flex gap-3">
+                  <div className="w-8 h-8 bg-orange-500 text-white rounded-full flex items-center justify-center font-bold flex-shrink-0">{i + 1}</div>
+                  <p className="text-gray-700 pt-1">{text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+<div className="bg-white rounded-2xl p-6">
+            <h3 className="font-semibold mb-3">Heimlich Maneuver Technique</h3>
+            
+            {/* Image 1: Standing Position */}
+            <div className="mb-4">
+              <div className="bg-orange-50 rounded-xl overflow-hidden">
+                <img
+                  src="/Heimlich_positioning.png"
+                  alt="Heimlich Standing Position"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 1: Positioning</p>
+              <p className="text-xs text-gray-600 mt-1">Stand behind the person. Wrap your arms around their waist. Position yourself slightly to one side.</p>
+            </div>
+
+            {/* Image 2: Fist Placement */}
+            <div className="mb-4">
+              <div className="bg-orange-50 rounded-xl overflow-hidden">
+                <img
+                  src="/Heimlich_hand.png"
+                  alt="Heimlich Fist Position"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 2: Hand Placement</p>
+              <p className="text-xs text-gray-600 mt-1">Make a fist with one hand. Place it just above the person's navel, below the ribcage. Grasp your fist with your other hand.</p>
+            </div>
+
+            {/* Image 3: Thrust Motion */}
+            <div className="mb-4">
+              <div className="bg-orange-50 rounded-xl overflow-hidden">
+                <img
+                  src="/Abdominal_thrust.png"
+                  alt="Heimlich Thrust"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 3: Abdominal Thrusts</p>
+              <p className="text-xs text-gray-600 mt-1">Give quick, upward thrusts into the abdomen. Use enough force to dislodge the object. Repeat until object is expelled.</p>
+            </div>
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mt-4">
+              <p className="text-sm font-semibold text-yellow-900">Important Notes:</p>
+              <ul className="text-xs text-yellow-800 mt-2 space-y-1">
+                <li>• For adults and children over 1 year old</li>
+                <li>• For infants, use back blows and chest thrusts</li>
+                <li>• If person becomes unconscious, begin CPR</li>
+                <li>• Seek medical attention even if object is dislodged</li>
+              </ul>
+            </div>
           </div>
         </div>
         <BottomNav currentScreen="profile" setCurrentScreen={setCurrentScreen} />
@@ -1608,6 +2076,96 @@ const App = () => {
     );
   }
 
+  if (currentScreen === 'bleeding') {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Bleeding Control" onBack={() => setCurrentScreen('profile')} />
+        <div className="p-4 space-y-6 pb-24">
+          <div className="bg-white rounded-2xl p-6">
+            <h2 className="font-bold text-xl mb-4">Severe Bleeding Control Steps</h2>
+            <div className="space-y-4">
+              {[
+                'Ensure scene safety and use protective gloves if available',
+                'Apply direct pressure to the wound with a clean cloth',
+                'Maintain firm, continuous pressure for at least 10 minutes',
+                'If blood soaks through, add more cloth without removing the first',
+                'Elevate the injured area above the heart if possible',
+                'Apply pressure to arterial pressure points if bleeding continues',
+                'Call emergency services immediately for severe bleeding'
+              ].map((text, i) => (
+                <div key={i} className="flex gap-3">
+                  <div className="w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center font-bold flex-shrink-0">{i + 1}</div>
+                  <p className="text-gray-700 pt-1">{text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+<div className="bg-white rounded-2xl p-6">
+            <h3 className="font-semibold mb-3">Bleeding Control Techniques</h3>
+            
+            {/* Image 1: Direct Pressure with hand */}
+            <div className="mb-4">
+              <div className="bg-red-50 rounded-xl overflow-hidden">
+                <img
+                  src="/pressure_hands.png"
+                  alt="Direct Pressure on Wound"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 1: Direct Pressure</p>
+              <p className="text-xs text-gray-600 mt-1">Apply firm, direct pressure to the wound using a clean cloth or sterile gauze. Maintain continuous pressure for at least 10 minutes.</p>
+            </div>
+
+            {/* Image 2: Dressing and Elevation */}
+            <div className="mb-4">
+              <div className="bg-red-50 rounded-xl overflow-hidden">
+                <img
+                  src="/bleed_press.png"
+                  alt="Elevate Injured Area"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 2: Elevation</p>
+              <p className="text-xs text-gray-600 mt-1">If possible, elevate the injured area above the level of the heart to help slow bleeding.</p>
+            </div>
+
+            {/* Image 3: Pressure Points- use tourniquet */}
+            <div className="mb-4">
+              <div className="bg-red-50 rounded-xl overflow-hidden">
+                <img
+                  src="/Tourniquet.png"
+                  alt="Arterial Pressure Points"
+                  className="w-full h-48 object-cover"
+                />
+              </div>
+              <p className="text-sm text-gray-700 mt-2 font-medium">Step 3: Pressure Points (if needed)</p>
+              <p className="text-xs text-gray-600 mt-1">If bleeding continues, apply pressure to arterial pressure points between wound and heart. Common points: brachial artery (arm) and femoral artery (leg).</p>
+            </div>
+
+            <div className="bg-red-100 border border-red-300 rounded-lg p-3 mt-4">
+              <p className="text-sm font-semibold text-red-900">⚠️ Critical Guidelines:</p>
+              <ul className="text-xs text-red-800 mt-2 space-y-1">
+                <li>• Never remove embedded objects - stabilize them</li>
+                <li>• Add more cloth if blood soaks through, don't remove first layer</li>
+                <li>• Call emergency services immediately for severe bleeding</li>
+                <li>• Watch for signs of shock (pale, cold, rapid pulse)</li>
+              </ul>
+            </div>
+          </div>          
+          <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4">
+            <h3 className="font-bold text-yellow-900 mb-2">⚠️ Warning Signs</h3>
+            <ul className="text-sm text-yellow-800 space-y-1">
+              <li>• Spurting or pulsating blood</li>
+              <li>• Blood soaking through multiple layers</li>
+              <li>• Signs of shock (pale, cold, rapid pulse)</li>
+              <li>• Loss of consciousness</li>
+            </ul>
+          </div>
+        </div>
+        <BottomNav currentScreen="profile" setCurrentScreen={setCurrentScreen} />
+      </div>
+    );
+  }
   if (currentScreen === 'profile') {
     return (
       <div className="min-h-screen bg-gray-100">
@@ -1643,9 +2201,25 @@ const App = () => {
               ))}
             </div>
           </div>
-          <button onClick={() => setCurrentScreen('cpr')} className="w-full bg-red-500 text-white rounded-2xl py-4 font-semibold hover:bg-red-600 transition-colors">
-            View Emergency Procedures
-          </button>
+<div className="mb-6">
+            <h3 className="font-bold text-lg mb-3 px-2">Emergency Procedures</h3>
+            <div className="bg-white rounded-2xl overflow-hidden">
+              {[
+                { id: 'cpr', label: 'CPR for Adults', screen: 'cpr' },
+                { id: 'choking', label: 'Choking Relief - Heimlich Maneuver', screen: 'choking' },
+                { id: 'bleeding', label: 'Severe Bleeding Control', screen: 'bleeding' }
+              ].map((procedure, i) => (
+                <button 
+                  key={i} 
+                  onClick={() => setCurrentScreen(procedure.screen)} 
+                  className="w-full px-4 py-4 flex justify-between items-center border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors"
+                >
+                  <span className="text-gray-700">{procedure.label}</span>
+                  <ChevronRight className="w-5 h-5 text-gray-400" />
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
       </div>
@@ -1655,28 +2229,38 @@ const App = () => {
   return null;
 };
 
-const Header = ({ title, onBack }) => (
+const Header = ({ title, onBack, showBack = true }) => (
   <div className="bg-white px-4 py-3 border-b sticky top-0 z-10">
     <div className="flex items-center justify-between">
-      {onBack ? <button onClick={onBack} className="text-blue-500">← Back</button> : <span className="text-sm">{new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>}
+      {showBack && onBack ? (
+        <button onClick={onBack} className="text-blue-500 flex items-center gap-1">
+          <ChevronLeft className="w-5 h-5" />
+          <span>Back</span>
+        </button>
+      ) : (
+        <span className="text-sm">{new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+      )}
       <span className="font-semibold">{title}</span>
-      <div className="w-12"></div>
+      <div className="w-16"></div>
     </div>
   </div>
 );
 
 const BottomNav = ({ currentScreen, setCurrentScreen }) => (
-  <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-8 py-3 flex justify-between items-center z-10">
+  <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3 flex justify-between items-center z-10">
     <button onClick={() => setCurrentScreen('home')} className={`flex flex-col items-center ${currentScreen === 'home' ? 'text-blue-500' : 'text-gray-400'}`}>
       <Home className="w-6 h-6" />
     </button>
     <button onClick={() => setCurrentScreen('events')} className={`flex flex-col items-center ${currentScreen === 'events' || currentScreen === 'eventDetail' ? 'text-blue-500' : 'text-gray-400'}`}>
       <AlertCircle className="w-6 h-6" />
     </button>
+    <button onClick={() => setCurrentScreen('createEvent')} className={`flex flex-col items-center ${currentScreen === 'createEvent' ? 'text-blue-500' : 'text-gray-400'}`}>
+      <PlusCircle className="w-6 h-6" />
+    </button>
     <button onClick={() => setCurrentScreen('map')} className={`flex flex-col items-center ${currentScreen === 'map' || currentScreen === 'navigation' ? 'text-blue-500' : 'text-gray-400'}`}>
       <Menu className="w-6 h-6" />
     </button>
-    <button onClick={() => setCurrentScreen('profile')} className={`flex flex-col items-center ${currentScreen === 'profile' || currentScreen === 'cpr' || currentScreen === 'activityHistory' || currentScreen === 'eventCodes' || currentScreen === 'feedback' || currentScreen === 'notifications' ? 'text-blue-500' : 'text-gray-400'}`}>
+    <button onClick={() => setCurrentScreen('profile')} className={`flex flex-col items-center ${currentScreen === 'profile' || currentScreen === 'cpr' || currentScreen === 'choking' || currentScreen === 'bleeding' || currentScreen === 'activityHistory' || currentScreen === 'eventCodes' || currentScreen === 'feedback' || currentScreen === 'notifications' ? 'text-blue-500' : 'text-gray-400'}`}>
       <User className="w-6 h-6" />
     </button>
   </div>
