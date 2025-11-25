@@ -39,7 +39,7 @@ const App = () => {
   const [locationPermission, setLocationPermission] = useState('prompt');
   const [showEmergencyCallMenu, setShowEmergencyCallMenu] = useState(false);
   const [selectedEmergencyType, setSelectedEmergencyType] = useState(null);
-  const [createdEvents, setCreatedEvents] = useState([]);
+  const [createdEvents, setcreatedEvents] = useState([]);
   const [eventVolunteers, setEventVolunteers] = useState({});
   const [userRespondingTo, setUserRespondingTo] = useState([]);
   const [userActivities, setUserActivities] = useState([]);
@@ -162,13 +162,6 @@ useEffect(() => {
   const WEATHER_API_KEY = 'bf8edeaa51844f2caad151032252110';
   const GEOAPIFY_API_KEY = '6a5a6eee4fb44c20bee69310910f4bdc';
 
-  const events = [
-    { id: 1, type: 'CVX - Cardiac Event', time: '2:00 - 3:00 PM', location: 'Nearby Street A', color: '#DC2626', lat: userLocation.lat + 0.005, lng: userLocation.lng + 0.003 },
-    { id: 2, type: 'MVA - Motor Vehicle Accident', time: '1:30 - 2:30 PM', location: 'Nearby Street B', color: '#EA580C', lat: userLocation.lat - 0.004, lng: userLocation.lng + 0.006 },
-    { id: 3, type: 'Fall Injury', time: '1:00 - 2:00 PM', location: 'Nearby Plaza', color: '#F59E0B', lat: userLocation.lat + 0.007, lng: userLocation.lng - 0.004 },
-    { id: 4, type: 'Respiratory Distress', time: '12:15 PM', location: 'Local Park', color: '#0891B2', lat: userLocation.lat - 0.003, lng: userLocation.lng - 0.005 },
-    { id: 5, type: 'Stroke - CVA', time: '11:45 AM', location: 'Community Center', color: '#DC2626', lat: userLocation.lat + 0.002, lng: userLocation.lng + 0.008 }
-  ];
 
   // Mesh Network Manager
   const MeshNetworkManager = useCallback(() => {
@@ -559,13 +552,13 @@ useEffect(() => {
   loadNearbyResources();
 }, [userLocation, GEOAPIFY_API_KEY]);
 
-// Check for nearby events and send notifications
+// Check for nearby createdEvents and send notifications
   useEffect(() => {
-    const checkNearbyEvents = () => {
+    const checkNearbycreatedEvents = () => {
       if (Notification.permission !== 'granted') return;
       
-      const allEvents = [...events, ...createdEvents];
-      allEvents.forEach(event => {
+      const allcreatedEvents = [...createdEvents];
+      allcreatedEvents.forEach(event => {
         const distance = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, event.lat, event.lng));
         if (distance <= 1) {
           new Notification('Nearby Emergency Event', {
@@ -578,11 +571,11 @@ useEffect(() => {
     };
 
     if (locationPermission === 'granted') {
-      checkNearbyEvents();
-      const interval = setInterval(checkNearbyEvents, 60000); // Check every minute
+      checkNearbycreatedEvents();
+      const interval = setInterval(checkNearbycreatedEvents, 60000); // Check every minute
       return () => clearInterval(interval);
     }
-  }, [userLocation, events, createdEvents, eventVolunteers, locationPermission]);
+  }, [userLocation, createdEvents, createdEvents, eventVolunteers, locationPermission]);
 
   useEffect(() => {
     if (currentScreen === 'splash') {
@@ -797,7 +790,7 @@ const sendChatMessage = (eventId) => {
 };
 
 const deleteEvent = (eventId) => {
-  setCreatedEvents(createdEvents.filter(e => e.id !== eventId));
+  setcreatedEvents(createdEvents.filter(e => e.id !== eventId));
   setEventVolunteers(prev => {
     const updated = {...prev};
     delete updated[eventId];
@@ -810,13 +803,13 @@ const deleteEvent = (eventId) => {
   });
   setShowDeleteConfirm(false);
   setEventToDelete(null);
-  setCurrentScreen('events');
+  setCurrentScreen('createdEvents');
 };
 
 const updateEvent = () => {
   if (!editingEvent) return;
   
-  setCreatedEvents(createdEvents.map(e => 
+  setcreatedEvents(createdEvents.map(e => 
     e.id === editingEvent.id ? editingEvent : e
   ));
   
@@ -1474,7 +1467,7 @@ if (currentScreen === 'navigation' && selectedResource) {
  	 )) : (
     	<div className="bg-white rounded-2xl p-6 text-center">
       	<p className="text-gray-500">No activity history yet</p>
-      	<p className="text-sm text-gray-400 mt-2">Your volunteer responses and created events 	will appear here</p>
+      	<p className="text-sm text-gray-400 mt-2">Your volunteer responses and created createdEvents 	will appear here</p>
    	 </div>
   	)}
 	</div>
@@ -1695,7 +1688,7 @@ onClick={() => {
     lat: userLocation.lat + (Math.random() - 0.5) * 0.02,
     lng: userLocation.lng + (Math.random() - 0.5) * 0.02
   };
-  setCreatedEvents([...createdEvents, newEvent]);
+  setcreatedEvents([...createdEvents, newEvent]);
   setEventVolunteers({...eventVolunteers, [newEvent.id]: 0});
   
   // Add to activity history
@@ -1708,7 +1701,7 @@ onClick={() => {
     date: new Date().toLocaleDateString('en-GB')
   }, ...prev]);
                 
-                // Request notification permission for nearby events
+                // Request notification permission for nearby createdEvents
                 if (Notification.permission === 'default') {
                   Notification.requestPermission().then(permission => {
                     if (permission === 'granted') {
@@ -1728,7 +1721,7 @@ onClick={() => {
                   emergencyServiceStatus: 'Not Arrived',
                   mediaFiles: []
                 });
-                setCurrentScreen('events');
+                setCurrentScreen('createdEvents');
               }}
               className="w-full bg-blue-500 text-white rounded-lg py-3 font-semibold hover:bg-blue-600"
             >
@@ -1827,10 +1820,10 @@ if (currentScreen === 'editEvent' && editingEvent) {
   );
 }
 
-  if (currentScreen === 'events') {
+  if (currentScreen === 'createdEvents') {
     return (
       <div className="min-h-screen bg-gray-50">
-        <Header title="Active Events" onBack={() => setCurrentScreen('home')} />
+        <Header title="Active createdEvents" onBack={() => setCurrentScreen('home')} />
         <div className="h-64">
           <MapContainer 
             center={[userLocation.lat, userLocation.lng]} 
@@ -1841,7 +1834,7 @@ if (currentScreen === 'editEvent' && editingEvent) {
             <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
               <Popup>Your Location</Popup>
             </Marker>
-	{[...events, ...createdEvents]
+	{[...createdEvents]
         	      .filter(event => {
                 	const distance = parseFloat(calculateDistance(userLocation.lat, 	userLocation.lng, event.lat, event.lng));
                 return distance <= 1;
@@ -1868,8 +1861,8 @@ if (currentScreen === 'editEvent' && editingEvent) {
           </MapContainer>
         </div>
 <div className="p-4 space-y-3 pb-24">
-          <h3 className="font-bold text-lg">Active Events Within 1km</h3>
-          {[...events, ...createdEvents]
+          <h3 className="font-bold text-lg">Active createdEvents Within 1km</h3>
+          {[...createdEvents]
             .filter(event => {
               const distance = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, event.lat, event.lng));
               return distance <= 1;
@@ -1906,7 +1899,7 @@ if (currentScreen === 'eventDetail' && selectedEvent) {
   
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header title="Event Details" onBack={() => setCurrentScreen('events')} />
+      <Header title="Event Details" onBack={() => setCurrentScreen('createdEvents')} />
       <div className="h-64">
         <MapContainer 
           center={[selectedEvent.lat, selectedEvent.lng]} 
@@ -2128,7 +2121,7 @@ if (currentScreen === 'eventDetail' && selectedEvent) {
         </div>
       )}
       
-      <BottomNav currentScreen="events" setCurrentScreen={setCurrentScreen} />
+      <BottomNav currentScreen="createdEvents" setCurrentScreen={setCurrentScreen} />
     </div>
   );
 }
@@ -2661,7 +2654,7 @@ const BottomNav = ({ currentScreen, setCurrentScreen }) => (
     <button onClick={() => setCurrentScreen('home')} className={`flex flex-col items-center ${currentScreen === 'home' ? 'text-blue-500' : 'text-gray-400'}`}>
       <Home className="w-6 h-6" />
     </button>
-    <button onClick={() => setCurrentScreen('events')} className={`flex flex-col items-center ${currentScreen === 'events' || currentScreen === 'eventDetail' ? 'text-blue-500' : 'text-gray-400'}`}>
+    <button onClick={() => setCurrentScreen('createdEvents')} className={`flex flex-col items-center ${currentScreen === 'createdEvents' || currentScreen === 'eventDetail' ? 'text-blue-500' : 'text-gray-400'}`}>
       <AlertCircle className="w-6 h-6" />
     </button>
     <button onClick={() => setCurrentScreen('createEvent')} className={`flex flex-col items-center ${currentScreen === 'createEvent' ? 'text-blue-500' : 'text-gray-400'}`}>
