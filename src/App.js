@@ -650,50 +650,44 @@ useEffect(() => {
     };
   }, [MeshNetworkManager]);
 
-  // Desktop: auto-fetch location
+// Desktop: auto-fetch location
 // Mobile: wait for user to tap "Grant Permission"
 useEffect(() => {
   if (!navigator.geolocation) return;
 
   if (!isMobile) {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
+    getCurrentPositionSafe()
+      .then(pos => {
         setUserLocation({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
         });
         setLocationPermission("granted");
-      },
-      (err) => {
-        console.log("Auto-location denied on desktop:", err);
+      })
+      .catch(err => {
+        console.log("Desktop location denied:", err);
         setLocationPermission("denied");
-      }
-    );
+      });
   }
 }, []);
 
-const requestLocation = () => {
-  if (!navigator.geolocation) {
-    alert("Geolocation not supported on this device.");
-    return;
-  }
+const requestLocation = async () => {
+  try {
+    const pos = await getCurrentPositionSafe();
 
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      setUserLocation({
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-      });
-      setLocationPermission("granted");
-      setShowLocationDialog(false);
-    },
-    (err) => {
-      console.log("User denied location:", err);
-      setLocationPermission("denied");
-      setShowLocationDialog(false);
-    },
-    { enableHighAccuracy: true, timeout: 8000 }
-  );
+    setUserLocation({
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+    });
+
+    setLocationPermission("granted");
+    setShowLocationDialog(false);
+  } catch (err) {
+    console.log("Location denied/error:", err);
+    setLocationPermission("denied");
+    setShowLocationDialog(false);
+    alert("Unable to get location. Enable location in app settings.");
+  }
 };
 
 const requestMobileLocation = async () => {
