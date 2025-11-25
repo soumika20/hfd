@@ -4,6 +4,9 @@ R.E.A.C.H. (Rapid Emergency Assistance and Community Help) is a human-centered e
 
 This repository contains the complete codebase for the web application and mobile-adapted interface, including frontend components, backend integrations with Firebase, and the AI processing pipeline. The project was developed as part of the Human Factors in Design course (ED3010).
 
+By Team 13
+Karthiga, Soumika, Vibhaa
+
 ---
 
 Deployment: https://reach-hfd.vercel.app/ <br>
