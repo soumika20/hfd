@@ -1,4 +1,3 @@
-import React, { useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { Home, Edit, Menu, User, ChevronRight, MapPin, Phone, Video, Camera, Image, AlertCircle, Navigation, Heart, Cloud, CloudRain, Wind, Thermometer, Activity, Wifi, WifiOff, Radio, Users,PlusCircle, ChevronLeft, Upload, Trash } from 'lucide-react';
@@ -17,18 +16,22 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 
-
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 // Firestore imports MUST BE AT TOP
 import {
   getFirestore,
   collection,
   addDoc,
+  setDoc,
   doc,
   updateDoc,
   getDocs,
   onSnapshot,
   serverTimestamp,
-  arrayUnion, deleteDoc
+  arrayUnion, deleteDoc,
+  query,
+  orderBy,
+  where,
 } from "firebase/firestore";
 
 // ---- Add this here ----
@@ -49,11 +52,12 @@ async function requestMobilePermissions() {
 }
 
 async function getCurrentPositionSafe() {
-  if (Capacitor.getPlatform() === "web") {
+  if (!Capacitor.isNativePlatform()) {
     return new Promise((resolve, reject) => {
       navigator.geolocation.getCurrentPosition(resolve, reject);
     });
   } else {
+    await Geolocation.checkPermissions(); // keep permission active
     return await Geolocation.getCurrentPosition();
   }
 }
@@ -67,6 +71,22 @@ L.Icon.Default.mergeOptions({
 });
 
 
+// 🔎 Reverse-geocode exact address from lat/lng
+const fetchExactAddress = async (lat, lng) => {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data && data.display_name) {
+      return data.display_name;  // Full address (street, area, city, state, country)
+    }
+    return null;
+  } catch (err) {
+    console.error("Reverse geocoding failed:", err);
+    return null;
+  }
+};
 
 // Custom marker icons
 const createCustomIcon = (color) => {
@@ -102,6 +122,106 @@ const App = () => {
   const [eventMediaFiles, setEventMediaFiles] = useState([]);
   const [showEventChat, setShowEventChat] = useState(false);
   const [chatMessages, setChatMessages] = useState({});
+  const [eventMessages, setEventMessages] = useState([]);
+  const [isChatMaximized, setIsChatMaximized] = useState(true);
+
+  const typingTimeoutRef = useRef(null);
+  const [isTyping, setIsTyping] = useState(false);
+
+  const [activeEventTab, setActiveEventTab] = useState('updates');
+ // Chat/media/recording state (add near your existing chat state block)
+const [recording, setRecording] = useState(false);
+const mediaRecorderRef = useRef(null);
+const recordedChunksRef = useRef([]);
+const chatFileInputRef = useRef(null); // hidden file input for chat uploads
+
+const deleteMediaItem = async (eventId, mediaObj) => {
+  if (!mediaObj) return;
+
+  try {
+    // 1) Storage delete
+    if (mediaObj.path) {
+      try {
+        await deleteObject(ref(storage, mediaObj.path));
+      } catch (err) {
+        console.warn("Storage delete failed:", err);
+      }
+    }
+
+    // 2) Update event mediaFiles
+    const prev = createdEvents.find(e => e.id === eventId);
+    const updated = (prev.mediaFiles || []).filter(m => m.path !== mediaObj.path);
+
+    try {
+      await updateDoc(doc(db, "createdEvents", eventId), { mediaFiles: updated });
+    } catch (e) {
+      console.warn("Firestore update failed:", e);
+    }
+
+    setCreatedEvents(prev =>
+      prev.map(ev => ev.id === eventId ? { ...ev, mediaFiles: updated } : ev)
+    );
+
+    if (selectedEvent?.id === eventId) {
+      setSelectedEvent(prev => ({ ...prev, mediaFiles: updated }));
+    }
+
+    // 3) Delete chat entries referencing this media
+    try {
+      const chatCol = collection(db, "createdEvents", eventId, "chat");
+      const q = query(chatCol, where("media.path", "==", mediaObj.path));
+      const snaps = await getDocs(q);
+      for (const sd of snaps.docs) {
+        try { await deleteDoc(sd.ref); } catch (err) {}
+      }
+    } catch (err) {
+      console.warn("Chat cleanup failed:", err);
+    }
+
+  } catch (err) {
+    console.error("deleteMediaItem failed:", err);
+  }
+};
+
+useEffect(() => {
+  if (!selectedEvent?.id) return;
+
+  const chatColRef = collection(db, "createdEvents", selectedEvent.id, "chat");
+  const q = query(chatColRef, orderBy("timestamp", "asc"));
+
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    const msgs = snapshot.docs.map(doc => {
+      const d = doc.data();
+      return {
+        ...d,
+        timestamp: d.timestamp?.toDate ? d.timestamp.toDate() : d.timestamp
+      };
+    });
+
+    setChatMessages(prev => ({ ...prev, [selectedEvent.id]: msgs }));
+    setEventMessages(msgs);
+  });
+
+  return () => unsubscribe();
+}, [selectedEvent?.id]);
+
+useEffect(() => {
+  if (!selectedEvent || selectedEvent === null) return;
+  if (selectedEvent.exactAddress) return;
+  if (typeof selectedEvent.lat !== "number" || typeof selectedEvent.lng !== "number") return;
+
+  fetchExactAddress(selectedEvent.lat, selectedEvent.lng)
+    .then(addr => {
+      if (addr) {
+        setSelectedEvent(prev =>
+          prev ? { ...prev, exactAddress: addr } : prev
+        );
+      }
+    })
+    .catch(err => console.error("Reverse geocode error:", err));
+}, [selectedEvent]);
+
+
   const [currentChatMessage, setCurrentChatMessage] = useState('');
   const [editingEvent, setEditingEvent] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -144,75 +264,128 @@ const handleContextMenu = (e, event) => {
 
 const hideContextMenu = () => setContextMenu({ visible: false, x: 0, y: 0, event: null });
 
-const sendChatMessage = (eventId) => {
+const sendTextMessage = async (eventId) => {
   if (!currentChatMessage.trim()) return;
-  
   const message = {
-    id: Date.now(),
-    text: currentChatMessage,
-    sender: 'You',
-    timestamp: new Date(),
-    isVolunteer: userRespondingTo.includes(eventId)
+    sender: auth.currentUser?.displayName || 'Anonymous',
+    userId: auth.currentUser?.uid || 'anonymous',
+    text: currentChatMessage.trim(),
+    timestamp: serverTimestamp(),
+    isVolunteer: userRespondingTo.includes(eventId),
+    type: 'text'
   };
-  
-  setChatMessages(prev => ({
-    ...prev,
-    [eventId]: [...(prev[eventId] || []), message]
-  }));
-  
+
+  const chatColRef = collection(db, "createdEvents", eventId, "chat");
+  try {
+    await addDoc(chatColRef, message);
+  } catch (err) {
+    console.error("Failed to send chat message:", err);
+  }
+
   setCurrentChatMessage('');
 };
 
-// Replace your existing deleteCreatedEvent function with this
-const deleteCreatedEvent = async (id) => {
-  if (!id) {
-    console.warn("deleteCreatedEvent called with no id");
-    setShowDeleteConfirm(false);
-    setEventToDelete(null);
+/**
+ * Upload media and sync it to:
+ * 1) Firebase Storage
+ * 2) Chat messages array
+ * 3) eventDetails.mediaFiles
+ * 4) Local UI states (media tab + selectedEvent)
+ */
+const uploadAndSendMedia = async (fileOrBlob, type = "image") => {
+  if (!selectedEvent?.id) {
+    console.warn("No event selected for media upload");
     return;
   }
 
   try {
-    // Try to find the event locally first (so we can delete attached media)
-    const ev = createdEvents.find(e => e.id === id) || (selectedEvent && selectedEvent.id === id ? selectedEvent : null);
+    // 1️⃣ Upload file
+    const uploaded = await uploadFile(fileOrBlob);
+    if (!uploaded) return;
 
-    // 1) Delete media files in Firebase Storage (best-effort, continue if some fail)
-    if (ev && Array.isArray(ev.mediaFiles) && ev.mediaFiles.length > 0) {
+    // Build media entry
+    const mediaEntry = {
+      type,
+      url: uploaded.url,
+      path: uploaded.path,
+      uploadedAt: Date.now(),
+      userId: auth.currentUser?.uid || "anonymous",
+    };
+
+    // 2️⃣ Update Firestore (createdEvents only)
+    await updateDoc(doc(db, "createdEvents", selectedEvent.id), {
+      mediaFiles: arrayUnion(mediaEntry),
+    });
+
+    // 3️⃣ Update React state (Media tab)
+    setSelectedEvent(prev => ({
+      ...prev,
+      mediaFiles: [...(prev.mediaFiles || []), mediaEntry]
+    }));
+
+    setCreatedEvents(prev =>
+      prev.map(ev =>
+        ev.id === selectedEvent.id
+          ? { ...ev, mediaFiles: [...(ev.mediaFiles || []), mediaEntry] }
+          : ev
+      )
+    );
+
+    // 4️⃣ Also insert into chat (optional but you wanted it)
+    const chatRef = collection(db, "createdEvents", selectedEvent.id, "chat");
+    await addDoc(chatRef, {
+      sender: "You",
+      userId: auth.currentUser?.uid,
+      type,
+      media: mediaEntry,
+      timestamp: serverTimestamp(),
+    });
+
+  } catch (err) {
+    console.error("Media upload failed:", err);
+  }
+};
+// Replace your existing deleteCreatedEvent function with this
+const deleteCreatedEvent = async (id) => {
+  if (!id) return setShowDeleteConfirm(false);
+
+  try {
+    // find event in createdEvents or selectedEvent
+    const ev = createdEvents.find(e => e.id === id) || (selectedEvent && selectedEvent.id === id ? selectedEvent : null);
+    const city = ev?.cityName || ev?.city || "unknown-city";
+
+    // 1) delete storage files (best effort)
+    if (ev?.mediaFiles && Array.isArray(ev.mediaFiles)) {
       await Promise.all(ev.mediaFiles.map(async (m) => {
-        try {
-          if (m.path) {
-            await deleteObject(ref(storage, m.path));
-            console.log("Deleted storage object:", m.path);
-          } else {
-            console.warn("Skipping deleteObject — no path on media item:", m);
-          }
-        } catch (err) {
-          console.warn("Failed to delete storage object (continuing):", err);
+        if (m?.path) {
+          try { await deleteObject(ref(storage, m.path)); } catch (e) { console.warn("storage delete failed", e); }
         }
       }));
     }
 
-    // 2) Delete Firestore document
-    await deleteDoc(doc(db, 'createdEvents', id));
+    // 2) delete chat doc and eventDetails doc
+    try {
+      await deleteDoc(doc(db, "events", city, id, "chat"));
+    } catch (e) { console.warn("Failed to delete chat doc:", e); }
 
-    // 3) Update local state
+    try {
+      await deleteDoc(doc(db, "events", city, id, "eventDetails"));
+    } catch (e) { console.warn("Failed to delete eventDetails doc", e); }
+
+    // 3) delete createdEvents index doc if exists
+    try { await deleteDoc(doc(db, "createdEvents", id)); } catch (e) { /* ignore */ }
+
+    // 4) update local state
     setCreatedEvents(prev => prev.filter(ev => ev.id !== id));
-    if (selectedEvent && selectedEvent.id === id) {
-      setSelectedEvent(null);
-    }
-
-    // 4) Ensure UI modal / context cleared
+    if (selectedEvent?.id === id) setSelectedEvent(null);
     setShowDeleteConfirm(false);
     setEventToDelete(null);
     hideContextMenu();
-
-    // 5) navigate to createdEvents screen
     setCurrentScreen('createdEvents');
 
-    console.log("Event deleted:", id);
+    console.log("Event fully removed:", id);
   } catch (err) {
-    console.error('Delete failed', err);
-    // Close modal and clear eventToDelete to avoid stuck UI even if deletion fails
+    console.error("Delete failed:", err);
     setShowDeleteConfirm(false);
     setEventToDelete(null);
   }
@@ -430,6 +603,46 @@ useEffect(() => {
       return null;
     }
   };
+  // Starts a MediaRecorder for microphone
+const startAudioRecording = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordedChunksRef.current = [];
+    const options = { mimeType: 'audio/webm' };
+    const mr = new MediaRecorder(stream, options);
+
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+    };
+
+    mr.onstop = async () => {
+      const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+      await uploadAndSendMedia(blob, 'audio');
+      // stop all tracks to release mic
+      stream.getTracks().forEach(t => t.stop());
+    };
+
+    mediaRecorderRef.current = mr;
+    mr.start();
+    setRecording(true);
+  } catch (err) {
+    console.error('Audio record start failed', err);
+    alert('Unable to access microphone.');
+    setRecording(false);
+  }
+};
+
+const stopAudioRecording = () => {
+  try {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  } catch (err) {
+    console.warn('stopAudioRecording err', err);
+  } finally {
+    setRecording(false);
+  }
+};
   // --- end firebase helper ---
 const eventTypeColors = {
   "Fire": "#DC2626",             // red
@@ -452,15 +665,65 @@ const getEventColor = (type) => {
 
   return "#6B7280";
 };
-  /** Save event to Firestore */
+/** Reverse geocode to get readable location */
+async function getLocationName(lat, lng) {
+  try {
+    const url = `https://api.geoapify.com/v1/geocode/reverse?lat=${lat}&lon=${lng}&apiKey=${GEOAPIFY_API_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    const props = data.features?.[0]?.properties || {};
+    const formatted = props.formatted || "Unknown Location";
+    const city =
+      props.city ||
+      props.county ||
+      props.state ||
+      "Unknown-City";
+
+    return { formatted, city };
+  } catch {
+    return { formatted: "Unknown Location", city: "Unknown-City" };
+  }
+}
+
+/** Save event to Firestore */
+/** Save event to Firestore — creates eventDetails and an empty chat doc */
 const saveEventToFirestore = async (eventData) => {
   try {
-    const docRef = await addDoc(collection(db, "createdEvents"), {
-      ...eventData,
-      createdAt: serverTimestamp(),
-    });
+    // get formatted location + city
+    const { formatted, city } = await getLocationName(eventData.lat, eventData.lng);
 
-    return docRef.id;
+    // timestamp-based ID: HHMMSS-type-DD-MM-YYYY
+    const ts = new Date();
+    const hh = String(ts.getHours()).padStart(2, '0');
+    const mm = String(ts.getMinutes()).padStart(2, '0');
+    const ss = String(ts.getSeconds()).padStart(2, '0');
+    const dateString = ts.toLocaleDateString('en-GB').replaceAll('/', '-');
+
+    const cleanCity = (city || 'unknown-city').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+    const cleanType = (eventData.type || 'event').replace(/ /g, '-').toLowerCase();
+
+    const eventId = `${hh}${mm}${ss}-${cleanType}-${dateString}`;
+
+    // write event details
+    await setDoc(
+      doc(db, "events", cleanCity, eventId, "eventDetails"),
+      {
+        ...eventData,
+        id: eventId,
+        cityName: cleanCity,
+        locationName: formatted,
+        createdAt: serverTimestamp()
+      }
+    );
+
+    // ensure chat doc exists for this event (one doc containing messages array)
+    await setDoc(
+      doc(db, "events", cleanCity, eventId, "chat"),
+      { messages: [] }
+    );
+
+    return { eventId, cityName: cleanCity };
   } catch (err) {
     console.error("🔥 Firestore save failed:", err);
     return null;
@@ -476,6 +739,26 @@ useEffect(() => {
     }));
 
     setCreatedEvents(createdEventsFromDB);
+    // 🔥 Auto-fetch exact address for each created event
+createdEventsFromDB.forEach(async (ev) => {
+  if (!ev.exactAddress && typeof ev.lat === "number" && typeof ev.lng === "number") {
+    const addr = await fetchExactAddress(ev.lat, ev.lng);
+    if (addr) {
+      try {
+        await updateDoc(doc(db, "createdEvents", ev.id), { exactAddress: addr });
+      } catch (e) {
+        console.warn("Failed to update exactAddress:", e);
+      }
+    }
+
+    // Update local state
+    setCreatedEvents(prev =>
+      prev.map(e =>
+        e.id === ev.id ? { ...e, exactAddress: addr } : e
+      )
+    );
+  }
+});
   });
 
   return () => unsubscribe();
@@ -732,8 +1015,6 @@ const requestMobileLocation = async () => {
   }
 };
   
-  <button onClick={requestMobileLocation}>Grant Permission</button>
-  
   useEffect(() => {
     const fetchWeather = async () => {
       if (!WEATHER_API_KEY) {
@@ -917,6 +1198,13 @@ useEffect(() => {
 }, [userLocation, GEOAPIFY_API_KEY]);
 
 // Check for nearby createdEvents and send notifications
+/*******************************
+ * Ensure eventData.id is set after saving event
+ *******************************/
+// (Search for usage of saveEventToFirestore and ensure the returned ID is set)
+// Example event creation logic (ensure this logic is present wherever a new event is created):
+// const id = await saveEventToFirestore(eventData);
+// eventData.id = id;
   useEffect(() => {
       const checkNearbycreatedEvents = () => {
         // Use LocalNotifications for native, fallback to Notification for web if needed
@@ -1205,6 +1493,7 @@ useEffect(() => {
             >
               <MapPin className={`w-4 h-4 ${locationPermission === 'granted' ? 'text-green-500' : locationPermission === 'denied' ? 'text-red-500' : 'text-gray-400'}`} />
             </button>
+
             
 		{isOnline ? (
               <Wifi className="w-4 h-4 text-green-500" />
@@ -1259,6 +1548,15 @@ useEffect(() => {
                 className="w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200"
               >
                 Close
+              </button>
+              <button
+                onClick={() => {
+                  setLocationPermission("denied");
+                  setUserLocation({ lat: 12.9716, lng: 77.5946 }); // fallback default
+                }}
+                className="w-full bg-red-100 text-red-700 py-3 rounded-lg font-medium hover:bg-red-200 mt-2"
+              >
+                Remove Location Access
               </button>
             </div>
           </div>
@@ -1574,7 +1872,7 @@ useEffect(() => {
           <div className="p-4 space-y-4">
             {weatherAlerts.length > 0 ? (
               weatherAlerts.map((alert, idx) => (
-                <div key={idx} className="bg-red-600 text-white rounded-2xl p-4 shadow-lg">
+                <div key={idx} className="bg-red-600 text-white rounded-2xl p-4 min-h-[35vh] shadow-lg">
                   <div className="flex items-start gap-2 mb-3">
                     <AlertCircle className="w-6 h-6 flex-shrink-0" />
                     <div className="flex-1">
@@ -2002,519 +2300,631 @@ if (currentScreen === 'navigation' && selectedResource) {
  /*******************************
   * EVENT DETAIL SCREEN (CLEAN)
   *******************************/
-if (currentScreen === "eventDetail" && selectedEvent) {
-  const isCreator = createdEvents.some((e) => e.id === selectedEvent.id);
-  const eventMessages = chatMessages[selectedEvent.id] || [];
+  if (currentScreen === "eventDetail" && selectedEvent) {
+    const isCreator = createdEvents.some((e) => e.id === selectedEvent.id);
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Header
-        title="Event Details"
-        onBack={() => setCurrentScreen("createdEvents")}
-      />
+    // Add tab state at top of component if missing
 
-      {/* MAP */}
-      <div className="h-64">
-        <MapContainer
-          center={[selectedEvent.lat, selectedEvent.lng]}
-          zoom={13}
-          style={{ height: "100%", width: "100%" }}
-        >
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          <Marker
-            position={[userLocation.lat, userLocation.lng]}
-            icon={createCustomIcon("#3B82F6")}
+    // 🔥 Firestore Live Chat Listener
+
+    // Reverse geocode helper for full address
+    const fetchExactAddress = async (lat, lng) => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
+        );
+        const data = await res.json();
+        if (data?.display_name) {
+          return data.display_name;
+        }
+      } catch (e) {
+        console.error("Reverse geocode failed:", e);
+      }
+      return null;
+    };
+
+
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header
+          title="Event Details"
+          onBack={() => setCurrentScreen("createdEvents")}
+        />
+
+        {/* MAP */}
+        <div className="h-64">
+          <MapContainer
+            center={[selectedEvent.lat, selectedEvent.lng]}
+            zoom={13}
+            style={{ height: "100%", width: "100%" }}
           >
-            <Popup>Your Location</Popup>
-          </Marker>
-          <Marker
-            position={[selectedEvent.lat, selectedEvent.lng]}
-            icon={createCustomIcon(selectedEvent.color)}
-          >
-            <Popup>{selectedEvent.type}</Popup>
-          </Marker>
-
-          {/* Simple polyline route */}
-          <Polyline
-            positions={[
-              [userLocation.lat, userLocation.lng],
-              [
-                userLocation.lat +
-                  (selectedEvent.lat - userLocation.lat) * 0.3,
-                userLocation.lng +
-                  (selectedEvent.lng - userLocation.lng) * 0.3,
-              ],
-              [
-                userLocation.lat +
-                  (selectedEvent.lat - userLocation.lat) * 0.7,
-                userLocation.lng +
-                  (selectedEvent.lng - userLocation.lng) * 0.7,
-              ],
-              [selectedEvent.lat, selectedEvent.lng],
-            ]}
-            color="#3B82F6"
-            weight={4}
-          />
-        </MapContainer>
-      </div>
-
-      {/* DETAIL CONTENT */}
-      <div className="p-4 space-y-4 pb-24">
-        {/* EVENT CARD */}
-        <div className="bg-red-600 text-white rounded-2xl p-4">
-          <div className="flex justify-between items-start mb-2">
-            <h2 className="font-bold text-xl">{selectedEvent.type}</h2>
-
-            {/* CREATOR ACTIONS */}
-            {isCreator && (
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    setEditingEvent({ ...selectedEvent });
-                    setCurrentScreen("editEvent");
-                  }}
-                  className="bg-white bg-opacity-20 p-2 rounded-lg hover:bg-opacity-30"
-                >
-                  <Edit className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => {
-                    setEventToDelete(selectedEvent.id);
-                    setShowDeleteConfirm(true);
-                  }}
-                  className="bg-white bg-opacity-20 p-2 rounded-lg hover:bg-opacity-30"
-                >
-                  <Trash className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-          </div>
-
-          <p className="text-sm mb-1">
-            Start Time: {selectedEvent.time?.split(" - ")[0]}
-          </p>
-
-          <p className="text-sm mb-1 flex items-center gap-1">
-            <MapPin className="w-4 h-4" />
-            {selectedEvent.location}
-          </p>
-
-          <p className="text-sm mb-3">
-            Distance:{" "}
-            {calculateDistance(
-              userLocation.lat,
-              userLocation.lng,
-              selectedEvent.lat,
-              selectedEvent.lng
-            )}{" "}
-            km away
-          </p>
-
-          {/* VOLUNTEERS */}
-          <div className="bg-white rounded-lg p-3 mb-3 text-gray-900">
-            <div className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-blue-500" />
-              <span className="font-bold">
-                {eventVolunteers[selectedEvent.id] || 0} Volunteer
-                {(eventVolunteers[selectedEvent.id] || 0) !== 1 ? "s" : ""}{" "}
-                Responding
-              </span>
-            </div>
-          </div>
-
-          {/* ACTIONS */}
-          <div className="flex gap-2 mb-3">
-            <button
-              onClick={() => {
-                if (!userRespondingTo.includes(selectedEvent.id)) {
-                  setEventVolunteers({
-                    ...eventVolunteers,
-                    [selectedEvent.id]:
-                      (eventVolunteers[selectedEvent.id] || 0) + 1,
-                  });
-                  setUserRespondingTo([
-                    ...userRespondingTo,
-                    selectedEvent.id,
-                  ]);
-
-                  setUserActivities((prev) => [
-                    {
-                      id: Date.now(),
-                      type: "Volunteer Response",
-                      eventType: selectedEvent.type,
-                      desc: `Volunteered for ${selectedEvent.type} at ${selectedEvent.location}`,
-                      time: new Date().toLocaleTimeString(),
-                      date: new Date().toLocaleDateString("en-GB"),
-                    },
-                    ...prev,
-                  ]);
-                }
-              }}
-              disabled={userRespondingTo.includes(selectedEvent.id)}
-              className={`${
-                userRespondingTo.includes(selectedEvent.id)
-                  ? "bg-green-500 text-white"
-                  : "bg-white text-red-600"
-              } px-4 py-2 rounded-lg font-medium flex-1`}
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <Marker
+              position={[userLocation.lat, userLocation.lng]}
+              icon={createCustomIcon("#3B82F6")}
             >
-              {userRespondingTo.includes(selectedEvent.id)
-                ? "✓ Responding"
-                : "I am responding"}
-            </button>
-
-            <button
-              className="bg-white bg-opacity-20 p-2 rounded-lg"
-              onClick={() => setCurrentScreen("navigation")}
+              <Popup>Your Location</Popup>
+            </Marker>
+            <Marker
+              position={[selectedEvent.lat, selectedEvent.lng]}
+              icon={createCustomIcon(selectedEvent.color)}
             >
-              <Navigation className="w-5 h-5" />
-            </button>
-          </div>
+              <Popup>{selectedEvent.type}</Popup>
+            </Marker>
 
-          {/* CHAT BUTTON */}
-          <button
-            onClick={() => setShowEventChat(!showEventChat)}
-            className="w-full bg-white text-red-600 px-4 py-2 rounded-lg font-medium flex items-center justify-center gap-2"
-          >
-            <Users className="w-5 h-5" />
-            Event Chat ({eventMessages.length})
-          </button>
-
-          {/* MEDIA DROPDOWN BUTTON */}
-          <button
-            onClick={() => {
-              setShowMediaDropdown(true);
-              setTimeout(() => {
-                const el = document.getElementById("mediaSection");
-                if (el) el.scrollIntoView({ behavior: "smooth" });
-              }, 150);
-            }}
-            className="w-full bg-white text-red-600 px-4 py-2 rounded-lg font-medium flex items-center justify-center gap-2 mt-3"
-          >
-            <Image className="w-5 h-5" />
-            View / Upload Media
-          </button>
+            {/* Simple polyline route */}
+            <Polyline
+              positions={[
+                [userLocation.lat, userLocation.lng],
+                [
+                  userLocation.lat +
+                    (selectedEvent.lat - userLocation.lat) * 0.3,
+                  userLocation.lng +
+                    (selectedEvent.lng - userLocation.lng) * 0.3,
+                ],
+                [
+                  userLocation.lat +
+                    (selectedEvent.lat - userLocation.lat) * 0.7,
+                  userLocation.lng +
+                    (selectedEvent.lng - userLocation.lng) * 0.7,
+                ],
+                [selectedEvent.lat, selectedEvent.lng],
+              ]}
+              color="#3B82F6"
+              weight={4}
+            />
+          </MapContainer>
         </div>
 
-        {/* CHAT SECTION */}
-        {showEventChat && (
-          <div className="bg-black text-white rounded-2xl p-4">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-bold">Event Chat</h3>
-              <button
-                onClick={() => setShowEventChat(false)}
-                className="text-gray-500"
-              >
-                ×
-              </button>
-            </div>
+        {/* DETAIL CONTENT */}
+        <div className="p-4 space-y-4 pb-24">
+          {/* EVENT CARD */}
+          <div className="bg-red-600 text-white rounded-2xl p-4 min-h-[20vh]">
+            <div className="flex flex-col gap-3 mb-2">
+              <div className="flex justify-between items-start">
+                <h2 className="font-bold text-xl">{selectedEvent.type}</h2>
 
-            <div className="bg-gray-900 rounded-lg p-3 mb-3 max-h-64 overflow-y-auto space-y-2">
-              {eventMessages.length === 0 ? (
-                <p className="text-sm text-gray-300 text-center py-4">
-                  No messages yet.
-                </p>
-              ) : (
-                eventMessages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`${
-                      msg.sender === "You" ? "text-right" : "text-left"
-                    }`}
-                  >
-                    <div
-                      className={`inline-block max-w-[80%] rounded-lg p-2 ${
-                        msg.sender === "You"
-                          ? "bg-blue-500 text-white"
-                          : "bg-gray-700 text-white"
-                      }`}
-                    >
-                      <p className="text-xs font-semibold mb-1">
-                        {msg.sender}{" "}
-                        {msg.isVolunteer ? "(Volunteer)" : "(Bystander)"}
-                      </p>
-                      <p className="text-sm">{msg.text}</p>
-                      <p className="text-xs opacity-75 mt-1">
-                        {msg.timestamp.toLocaleTimeString()}
-                      </p>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={currentChatMessage}
-                onChange={(e) => setCurrentChatMessage(e.target.value)}
-                onKeyPress={(e) =>
-                  e.key === "Enter" && sendChatMessage(selectedEvent.id)
-                }
-                placeholder="Type a message..."
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black"
-              />
-              <button
-                onClick={() => sendChatMessage(selectedEvent.id)}
-                className="bg-blue-500 text-white px-4 py-2 rounded-lg"
-              >
-                Send
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* UPDATES */}
-        <div className="bg-white rounded-2xl p-4">
-          <div className="flex justify-between items-center mb-3">
-            <h3 className="font-bold">Updates</h3>
-            <button className="bg-blue-500 text-white px-4 py-1 rounded-full text-sm">
-              See more
-            </button>
-          </div>
-
-          <div className="space-y-2">
-            {[
-              "Volunteer Arrived at Scene",
-              "ETA confirmed for Ambulance",
-              "Paramedic en route",
-            ].map((update, idx) => (
-              <div key={idx} className="bg-red-50 rounded-lg p-3 text-sm">
-                <p className="text-red-800">{update}</p>
-                <p className="text-gray-500 text-xs mt-1">
-                  {5 + idx * 3} mins ago
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* MEDIA DROPDOWN CONTENT */}
-        {showMediaDropdown && (
-          <div id="mediaSection" className="bg-black text-white rounded-2xl p-4 space-y-4">
-            <h3 className="font-bold mb-2">Event Media</h3>
-
-            {selectedEvent.mediaFiles?.length > 0 ? (
-              <div className="grid grid-cols-4 gap-2">
-                {selectedEvent.mediaFiles.map((media, idx) => (
-                  <div
-                    key={idx}
-                    className="relative bg-gray-800 rounded-lg overflow-hidden cursor-pointer aspect-square"
-                    onClick={() => {
-                      setFullscreenMediaIndex(idx);
-                      setShowFullscreenMedia(true);
-                    }}
-                  >
-                    {media.type === "image" ? (
-                      <img src={media.url} className="w-full h-full object-cover" alt="" />
-                    ) : (
-                      <video src={media.url} className="w-full h-full object-cover" />
-                    )}
-
-                    // inside the media grid, replace the delete button's onClick handler with this:
+                {/* CREATOR ACTIONS */}
+                {isCreator && (
+                  <div className="flex gap-2">
                     <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-
-                        try {
-                          // 1) Delete the storage object (if path available)
-                          if (media.path) {
-                            await deleteObject(ref(storage, media.path));
-                            console.log("Deleted storage object:", media.path);
-                          } else {
-                            console.warn("Media has no path; skipping storage delete:", media);
-                          }
-
-                          // 2) Build updated media array (remove the item at idx)
-                          const updated = (selectedEvent.mediaFiles || []).filter((m, i) => i !== idx);
-
-                          // 3) Update Firestore doc with the full updated array
-                          const docRef = doc(db, "createdEvents", selectedEvent.id);
-                          await updateDoc(docRef, {
-                            mediaFiles: updated
-                          });
-
-                          // 4) Update local UI state so gallery updates immediately
-                          setSelectedEvent(prev => ({ ...prev, mediaFiles: updated }));
-                          setCreatedEvents(prev => prev.map(ev => ev.id === selectedEvent.id ? { ...ev, mediaFiles: updated } : ev));
-
-                          console.log("Media removed and Firestore updated");
-                        } catch (err) {
-                          console.error("Media delete failed:", err);
-                          // Optionally show a small toast/alert for the user
-                        }
+                      onClick={() => {
+                        setEditingEvent({ ...selectedEvent });
+                        setCurrentScreen("editEvent");
                       }}
-                      className="absolute top-1 right-1 bg-red-600 bg-opacity-80 text-white px-2 py-1 rounded text-xs"
+                      className="bg-white bg-opacity-20 p-2 rounded-lg hover:bg-opacity-30"
                     >
-                      Delete
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEventToDelete(selectedEvent.id);
+                        setShowDeleteConfirm(true);
+                      }}
+                      className="bg-white bg-opacity-20 p-2 rounded-lg hover:bg-opacity-30"
+                    >
+                      <Trash className="w-4 h-4" />
                     </button>
                   </div>
-                ))}
+                )}
               </div>
-            ) : (
-              <p className="text-gray-300 text-sm">No media uploaded yet.</p>
-            )}
 
-            {/* ADD MORE MEDIA BUTTON */}
-            <button
-              onClick={() => document.getElementById("addMoreMediaInput").click()}
-              className="w-full bg-white text-black border border-gray-300 rounded-lg p-3 flex items-center justify-center gap-2"
-            >
-              <Upload className="w-5 h-5" />
-              Add More Media
-            </button>
-            <input
-              type="file"
-              id="addMoreMediaInput"
-              accept="image/*,video/*"
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const uploaded = await uploadFile(file);
-                if (uploaded) {
-                  const updatedMedia = [
-                    ...(selectedEvent.mediaFiles || []),
-                    { url: uploaded.url, type: file.type.startsWith("video") ? "video" : "image" }
-                  ];
-                  await updateDoc(doc(db, "createdEvents", selectedEvent.id), {
-                    mediaFiles: updatedMedia
-                  });
-                  setSelectedEvent({ ...selectedEvent, mediaFiles: updatedMedia });
-                  alert("Media uploaded successfully!");
-                }
-              }}
-            />
-           {showFullscreenMedia && (
-              <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center p-4 z-[9999]">
-                
-                {/* CLOSE BUTTON */}
-                <button
-                  className="absolute top-6 right-6 text-white text-3xl"
-                  onClick={() => setShowFullscreenMedia(false)}
-                >
-                  ×
-                </button>
+              {/* START TIME + LOCATION (moved up) */}
+              <div className="mt-1">
+                <p className="text-sm mb-1">Start Time: {selectedEvent.time?.split(' - ')[0]}</p>
 
-                {/* CURRENT IMAGE/VIDEO */}
-                <div className="flex items-center justify-center w-full">
-                  {selectedEvent.mediaFiles[fullscreenMediaIndex].type === "image" ? (
-                    <img
-                      src={selectedEvent.mediaFiles[fullscreenMediaIndex].url}
-                      className="max-w-[70vw] max-h-[70vh] object-contain rounded-lg"
-                    />
-                  ) : (
-                    <video
-                      src={selectedEvent.mediaFiles[fullscreenMediaIndex].url}
-                      controls
-                      className="max-w-[70vw] max-h-[70vh] object-contain rounded-lg"
-                    />
-                  )}
+                <div className="flex items-center gap-2 mb-1">
+                  <button
+                    onClick={() => {
+                      // set selected resource and open navigation to this event
+                      try {
+                        setSelectedResource({ lat: selectedEvent.lat, lng: selectedEvent.lng, name: selectedEvent.location });
+                      } catch (e) {
+                        // fallback if setSelectedResource not present
+                        window.selectedResource = { lat: selectedEvent.lat, lng: selectedEvent.lng, name: selectedEvent.location };
+                      }
+                      setCurrentScreen('navigation');
+                    }}
+                    className="flex items-center gap-2 text-sm text-white"
+                    title="Open map and get directions"
+                  >
+                    {/* REPLACE LOCATION DISPLAY BLOCK */}
+                    <div className="flex items-center gap-2 mb-1">
+                      <MapPin className="w-4 h-4" />
+                      <span>
+                        {selectedEvent.exactAddress
+                          ? selectedEvent.exactAddress
+                          : selectedEvent.location}
+                      </span>
+                    </div>
+                  </button>
                 </div>
 
-                {/* IMAGE COUNT */}
-                <p className="text-white mt-4 text-sm opacity-80">
-                  {fullscreenMediaIndex + 1} / {selectedEvent.mediaFiles.length}
-                </p>
+                <p className="text-sm mb-3 opacity-90">Distance: {calculateDistance(userLocation.lat, userLocation.lng, selectedEvent.lat, selectedEvent.lng)} km away</p>
+              </div>
 
-                {/* NAVIGATION BUTTONS */}
-                <div className="flex justify-between w-full max-w-[300px] mt-4">
-                  <button
-                    className="bg-white text-black px-4 py-2 rounded-lg"
-                    onClick={() =>
-                      setFullscreenMediaIndex(
-                        (fullscreenMediaIndex - 1 + selectedEvent.mediaFiles.length) %
-                          selectedEvent.mediaFiles.length
-                      )
-                    }
-                  >
-                    Prev
-                  </button>
+              {/* EVENT DESCRIPTION */}
+              {selectedEvent.description && (
+                <div className="bg-white bg-opacity-20 text-white rounded-lg p-3 text-sm">
+                  <p className="font-medium mb-1">Description</p>
+                  <p className="text-sm text-white/95">{selectedEvent.description}</p>
+                  {/* show exact coordinates too */}
+                  <p className="text-xs text-white/75 mt-2">📍 {selectedEvent.lat.toFixed(5)}, {selectedEvent.lng.toFixed(5)}</p>
+                </div>
+              )}
 
+              {/* VOLUNTEERS + RESPOND BUTTON (moved below description) */}
+              <div className="flex items-center justify-between mt-2">
+                <div className="bg-white rounded-lg p-3 text-gray-900 flex items-center gap-2 flex-1">
+                  <Users className="w-5 h-5 text-blue-500" />
+                  <span className="font-bold">
+                    {eventVolunteers[selectedEvent.id] || 0} Volunteer{(eventVolunteers[selectedEvent.id] || 0) !== 1 ? 's' : ''} Responding
+                  </span>
+                </div>
+
+                <div className="ml-3">
                   <button
-                    className="bg-white text-black px-4 py-2 rounded-lg"
-                    onClick={() =>
-                      setFullscreenMediaIndex(
-                        (fullscreenMediaIndex + 1) % selectedEvent.mediaFiles.length
-                      )
-                    }
+                    onClick={() => {
+                      if (!userRespondingTo.includes(selectedEvent.id)) {
+                        setEventVolunteers({
+                          ...eventVolunteers,
+                          [selectedEvent.id]: (eventVolunteers[selectedEvent.id] || 0) + 1,
+                        });
+                        setUserRespondingTo([...userRespondingTo, selectedEvent.id]);
+
+                        setUserActivities((prev) => [
+                          {
+                            id: Date.now(),
+                            type: 'Volunteer Response',
+                            eventType: selectedEvent.type,
+                            desc: `Volunteered for ${selectedEvent.type} at ${selectedEvent.location}`,
+                            time: new Date().toLocaleTimeString(),
+                            date: new Date().toLocaleDateString('en-GB'),
+                          },
+                          ...prev,
+                        ]);
+                      }
+                    }}
+                    disabled={userRespondingTo.includes(selectedEvent.id)}
+                    className={`${
+                      userRespondingTo.includes(selectedEvent.id) ? 'bg-green-500 text-white' : 'bg-white text-red-600'
+                    } px-4 py-2 rounded-lg font-medium`}
                   >
-                    Next
+                    {userRespondingTo.includes(selectedEvent.id) ? '✓ Responding' : 'I am responding'}
                   </button>
                 </div>
               </div>
-            )}
+
+              {/* TABS: Updates | Chat | Media (black background, unselected text white) */}
+              <div className="mt-3 rounded-lg p-1 bg-black">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setActiveEventTab('updates')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'updates' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Updates
+                  </button>
+
+                  <button
+                    onClick={() => setActiveEventTab('chat')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'chat' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Chat ({(chatMessages[selectedEvent.id] || []).length})
+                  </button>
+
+                  <button
+                    onClick={() => setActiveEventTab('media')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'media' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Media ({(selectedEvent.mediaFiles || []).length})
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
 
+          {/* SUBSCREEN: Updates | Chat | Media (inline, swap by activeEventTab) */}
+          <div className="mt-4">
+            {activeEventTab === 'updates' && (
+              <div className="bg-white rounded-2xl p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-bold">Updates</h3>
+                  <button className="bg-blue-500 text-white px-4 py-1 rounded-full text-sm">See more</button>
+                </div>
+
+                <div className="space-y-2">
+                  {[
+                    'Volunteer Arrived at Scene',
+                    'ETA confirmed for Ambulance',
+                    'Paramedic en route',
+                  ].map((update, idx) => (
+                    <div key={idx} className="bg-red-50 rounded-lg p-3 text-sm">
+                      <p className="text-red-800">{update}</p>
+                      <p className="text-gray-500 text-xs mt-1">{5 + idx * 3} mins ago</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+                            {/* ================= CHAT TAB ================= */}
+                {activeEventTab === "chat" && (
+                  <div className="bg-black text-white rounded-2xl p-4 flex flex-col" style={{ minHeight: "60vh" }}>
+                    
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-bold">Event Chat</h3>
+                      <button
+                        onClick={() => setIsChatMaximized(prev => !prev)}
+                        className="px-2 py-1 bg-gray-800 rounded"
+                      >
+                        {isChatMaximized ? "Minimize" : "Maximize"}
+                      </button>
+                    </div>
+
+                    {/* Messages */}
+                    <div className="bg-gray-900 rounded-lg p-3 mb-3 overflow-y-auto flex-1 min-h-0">
+                      {(!eventMessages || eventMessages.length === 0) ? (
+                        <p className="text-sm text-gray-300 text-center py-4">No messages yet.</p>
+                      ) : (
+                        eventMessages.map((msg, i) => {
+                          const isMine = msg.userId === auth.currentUser?.uid || msg.sender === "You";
+                          const timeStr = msg.timestamp
+                            ? (msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp))
+                                .toLocaleString("en-GB", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                  day: "2-digit",
+                                  month: "short",
+                                })
+                            : "";
+
+                          return (
+                            <div key={i} className={`mb-3 flex ${isMine ? "justify-end" : "justify-start"}`}>
+                              <div className={`inline-block max-w-[80%] rounded-lg p-3 ${isMine ? "bg-blue-500 text-white" : "bg-gray-700 text-white"}`}>
+                                
+                                {/* Sender */}
+                                <div className="text-xs font-semibold mb-1">
+                                  {msg.sender} {msg.isVolunteer ? "(Volunteer)" : "(Bystander)"}
+                                </div>
+
+                                {/* TEXT */}
+                                {msg.text && <div className="text-sm mb-1">{msg.text}</div>}
+
+                                {/* IMAGE */}
+                                {msg.media?.type === "image" && (
+                                  <img
+                                    src={msg.media.url}
+                                    className="mt-2 rounded-lg"
+                                    style={{ maxWidth: "180px", maxHeight: "180px", objectFit: "cover" }}
+                                    alt=""
+                                  />
+                                )}
+
+                                {/* VIDEO */}
+                                {msg.media?.type === "video" && (
+                                  <video
+                                    src={msg.media.url}
+                                    controls
+                                    className="mt-2 rounded-lg"
+                                    style={{ maxWidth: "200px" }}
+                                  />
+                                )}
+
+                                {/* AUDIO */}
+                                {msg.media?.type === "audio" && (
+                                  <audio src={msg.media.url} controls className="mt-2 w-full" />
+                                )}
+
+                                {/* Time */}
+                                <div className="text-xs opacity-75 mt-2 text-right">{timeStr}</div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+
+                      {/* Typing indicator */}
+                      {isTyping && (
+                        <div className="text-left mt-1">
+                          <div className="inline-block bg-gray-700 text-white px-3 py-1 rounded-lg text-xs opacity-80 animate-pulse">
+                            Someone is typing…
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Input Row */}
+                    <div className="p-3 border-t bg-white flex items-center gap-2">
+
+                      {/* Record button */}
+                      <button
+                        onMouseDown={startAudioRecording}
+                        onMouseUp={stopAudioRecording}
+                        onTouchStart={startAudioRecording}
+                        onTouchEnd={stopAudioRecording}
+                        className={`p-2 rounded-lg ${recording ? "bg-red-400 text-white" : "bg-gray-200"}`}
+                      >
+                        {recording ? "● REC" : "🎤"}
+                      </button>
+
+                      {/* Stop button */}
+                      <button
+                        onClick={stopAudioRecording}
+                        className="p-2 rounded-lg bg-red-500 text-white"
+                      >
+                        ⏹
+                      </button>
+
+                      {/* File upload */}
+                      <button
+                        onClick={() => chatFileInputRef.current?.click()}
+                        className="p-2 rounded-lg bg-gray-200"
+                      >
+                        📎
+                      </button>
+
+                      {/* Message input */}
+                      <input
+                        type="text"
+                        value={currentChatMessage}
+                        onChange={(e) => setCurrentChatMessage(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && sendTextMessage(selectedEvent.id)}
+                        placeholder="Type a message…"
+                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg bg-white text-black"
+                      />
+
+                      {/* Send button */}
+                      <button
+                        onClick={() => sendTextMessage(selectedEvent.id)}
+                        className="bg-blue-500 text-white px-4 py-2 rounded-lg"
+                      >
+                        Send
+                      </button>
+                    </div>
+
+                    {/* Hidden file input */}
+                    <input
+                      ref={chatFileInputRef}
+                      type="file"
+                      accept="image/*,video/*,audio/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+
+                        let type = "image";
+                        if (f.type.startsWith("video")) type = "video";
+                        if (f.type.startsWith("audio")) type = "audio";
+
+                        await uploadAndSendMedia(f, type);
+                        e.target.value = null;
+                      }}
+                    />
+                  </div>
+                )}
+                
+{activeEventTab === 'media' && (
+  <div id="mediaSection" className="bg-black text-white rounded-2xl p-4 space-y-4">
+    <h3 className="font-bold mb-2">Event Media</h3>
+
+    {selectedEvent.mediaFiles?.length > 0 ? (
+      <div className="grid grid-cols-3 md:grid-cols-4 gap-2">
+        {selectedEvent.mediaFiles.map((media, idx) => (
+          <div
+            key={idx}
+            className="relative overflow-hidden cursor-pointer aspect-square flex items-center justify-center"
+            onClick={() => {
+              setFullscreenMediaIndex(idx);
+              setShowFullscreenMedia(true);
+            }}
+          >
+            {/* IMAGE THUMBNAIL (reduced size) */}
+            {media.type === 'image' ? (
+              <img
+                src={media.url}
+                alt="event-media"
+                className="w-full h-full object-cover"
+                style={{ maxWidth: '300px', maxHeight: '300px' }}
+              />
+
+            ) : media.type === 'audio' ? (
+              /* AUDIO THUMBNAIL - show small bubble with play button */
+              <div className="p-3 w-full flex items-center justify-center">
+                <AudioBubble url={media.url} isMine={false} />
+              </div>
+
+            ) : (
+              /* VIDEO THUMBNAIL (no autoplay) */
+              <video src={media.url} className="w-full h-full object-cover" />
+            )}
+
+            {/* NOTE: delete moved to slideshow (no overlay here) */}
+          </div>
+        ))}
       </div>
+    ) : (
+      <p className="text-gray-300 text-sm">No media uploaded yet.</p>
+    )}
 
-      {/* CONTEXT MENU */}
-      {contextMenu.visible && contextMenu.event && (
-        <div
-          style={{
-            position: "fixed",
-            left: contextMenu.x,
-            top: contextMenu.y,
-            zIndex: 10000,
-          }}
-          className="bg-white rounded-md shadow-lg"
-        >
-          <button
-            onClick={() => startEditEvent(contextMenu.event)}
-            className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-          >
-            Edit
-          </button>
+    <button onClick={() => document.getElementById('addMoreMediaInput').click()} className="w-full bg-white text-black border border-gray-300 rounded-lg p-3 flex items-center justify-center gap-2">
+      <Upload className="w-5 h-5" /> Add More Media
+    </button>
 
-          <button
-            onClick={() => deleteCreatedEvent(contextMenu.event.id)}
-            className="block w-full text-left px-4 py-2 text-red-600 hover:bg-gray-100"
-          >
-            Delete
-          </button>
+    <input
+      id="addMoreMediaInput"
+      type="file"
+      accept="image/*,video/*,audio/*"
+      multiple
+      className="hidden"
+      onChange={async (e) => {
+        const files = Array.from(e.target.files || []);
+        for (const f of files) {
+          const type = f.type.startsWith('video') ? 'video' : f.type.startsWith('audio') ? 'audio' : 'image';
+          await uploadAndSendMedia(f, type);
+        }
+        e.target.value = null;
+      }}
+    />
 
-          <button
-            onClick={updateEvent}
-            className="w-full bg-blue-500 text-white rounded-lg py-3 font-semibold hover:bg-blue-600"
-          >
-            Update Event
-          </button>
-        </div>
-      )}
+    {/* ============ Fullscreen Slideshow Modal ============ */}
+    {showFullscreenMedia && selectedEvent && (
+      <div className="fixed inset-0 z-50 bg-black bg-opacity-80 flex items-center justify-center p-4">
+        <div className="relative w-full max-w-4xl bg-transparent">
+          {/* Header: slide index + close */}
+          <div className="flex items-center justify-between mb-3 text-white">
+            <div className="text-sm">{(fullscreenMediaIndex + 1)}/{(selectedEvent.mediaFiles || []).length}</div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowFullscreenMedia(false)} className="px-3 py-1 bg-white bg-opacity-10 rounded">Close</button>
+            </div>
+          </div>
+          {/* Custom Slideshow Block */}
+          <div className="w-full flex flex-col items-center justify-center text-white">
+            {/* Slide content (no borders) */}
+            <div className="flex items-center justify-center mb-4" style={{ maxHeight: '70vh' }}>
+              {(() => {
+                const media = (selectedEvent.mediaFiles || [])[fullscreenMediaIndex];
+                if (!media) return null;
 
-      <BottomNav
-        currentScreen="createdEvents"
-        setCurrentScreen={setCurrentScreen}
-      />
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-64 text-center">
-            <h3 className="font-bold text-lg mb-4">Delete this event?</h3>
+                if (media.type === 'image') {
+                  return (
+                    <img src={media.url} className="max-h-[70vh] max-w-full object-contain" alt="slide" />
+                  );
+                }
 
-            <div className="flex gap-3">
+                if (media.type === 'video') {
+                  return (
+                    <video src={media.url} controls className="max-h-[70vh] max-w-full" />
+                  );
+                }
+
+                if (media.type === 'audio') {
+                  return (
+                    <div className="p-6 bg-gray-900 rounded-lg flex items-center justify-center">
+                      <AudioBubble url={media.url} isMine={true} />
+                    </div>
+                  );
+                }
+
+                return null;
+              })()}
+            </div>
+            {/* Prev / Delete / Next (below the media, centered) */}
+            <div className="flex items-center justify-center gap-6 mt-4">
               <button
-                onClick={() => setShowDeleteConfirm(false)}
-                className="flex-1 py-2 rounded-lg bg-gray-200"
+                onClick={() => setFullscreenMediaIndex(i => Math.max(0, i - 1))}
+                className="px-4 py-2 bg-white bg-opacity-10 rounded-lg text-white"
               >
-                Cancel
+                ◀ Prev
               </button>
-
               <button
-                onClick={() => deleteCreatedEvent(eventToDelete)}
-                className="flex-1 py-2 rounded-lg bg-red-600 text-white"
+                onClick={async () => {
+                  const media = selectedEvent.mediaFiles[fullscreenMediaIndex];
+                  await deleteMediaItem(selectedEvent.id, media);
+                
+                  const updated = selectedEvent.mediaFiles.filter(
+                    (_, i) => i !== fullscreenMediaIndex
+                  );
+                
+                  if (updated.length === 0) {
+                    setShowFullscreenMedia(false);
+                  } else {
+                    setFullscreenMediaIndex(i =>
+                      Math.min(updated.length - 1, i)
+                    );
+                  }
+                }}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg"
               >
                 Delete
               </button>
+              <button
+                onClick={() => setFullscreenMediaIndex(i =>
+                  Math.min((selectedEvent.mediaFiles || []).length - 1, i + 1)
+                )}
+                className="px-4 py-2 bg-white bg-opacity-10 rounded-lg text-white"
+              >
+                Next ▶
+              </button>
             </div>
           </div>
         </div>
-      )}
-    </div>
-  );
-}
+      </div>
+    )}
+
+  </div>
+)}
+          </div>
+
+          {/* CONTEXT MENU */}
+          {contextMenu.visible && contextMenu.event && (
+            <div
+              style={{
+                position: "fixed",
+                left: contextMenu.x,
+                top: contextMenu.y,
+                zIndex: 10000,
+              }}
+              className="bg-white rounded-md shadow-lg"
+            >
+              <button
+                onClick={() => startEditEvent(contextMenu.event)}
+                className="block w-full text-left px-4 py-2 hover:bg-gray-100"
+              >
+                Edit
+              </button>
+
+              <button
+                onClick={() => deleteCreatedEvent(contextMenu.event.id)}
+                className="block w-full text-left px-4 py-2 text-red-600 hover:bg-gray-100"
+              >
+                Delete
+              </button>
+
+              <button
+                onClick={updateEvent}
+                className="w-full bg-blue-500 text-white rounded-lg py-3 font-semibold hover:bg-blue-600"
+              >
+                Update Event
+              </button>
+            </div>
+          )}
+
+          <BottomNav
+            currentScreen="createdEvents"
+            setCurrentScreen={setCurrentScreen}
+          />
+          {showDeleteConfirm && (
+            <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+              <div className="bg-white rounded-xl p-6 w-64 text-center">
+                <h3 className="font-bold text-lg mb-4">Delete this event?</h3>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="flex-1 py-2 rounded-lg bg-gray-200"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    onClick={() => deleteCreatedEvent(eventToDelete)}
+                    className="flex-1 py-2 rounded-lg bg-red-600 text-white"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (currentScreen === 'createEvent') {
     return (
+      <>
       <div className="min-h-screen bg-gray-50">
         <Header title="Create Event" onBack={() => setCurrentScreen('home')} />
         <div className="p-4 space-y-4 pb-24">
@@ -2540,7 +2950,7 @@ if (currentScreen === "eventDetail" && selectedEvent) {
               <label className="block text-sm font-semibold mb-2">Location</label>
               <input
                 type="text"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg"
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black placeholder-gray-500"
                 value={newEventForm.location || `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`}
                 onChange={(e) => setNewEventForm({ ...newEventForm, location: e.target.value })}
               />
@@ -2796,6 +3206,8 @@ if (currentScreen === "eventDetail" && selectedEvent) {
           </button>
         </div>
       </div>
+      <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
+  </>
     );
   }
   
@@ -2920,7 +3332,6 @@ if (currentScreen === "eventDetail" && selectedEvent) {
               >
                 <Popup>
                   <strong>{event.type}</strong><br />
-                  {event.location}<br />
                   {event.time}
                 </Popup>
               </Marker>
@@ -2951,9 +3362,9 @@ if (currentScreen === "eventDetail" && selectedEvent) {
                 <button className="bg-white bg-opacity-20 px-3 py-1 rounded-full text-xs">View Details</button>
               </div>
               <p className="text-sm opacity-90 mb-1">{event.time}</p>
-              <p className="text-sm opacity-90 flex items-center gap-1">
-                <MapPin className="w-4 h-4" />
-                {event.location}
+              <p className="text-xs flex items-center gap-1 mt-1">
+                <MapPin className="w-3 h-3" />
+                {event.exactAddress ?? event.locationName ?? event.location ?? "Fetching address..."}
               </p>
               <p className="text-xs opacity-75 mt-1">
                 {calculateDistance(userLocation.lat, userLocation.lng, event.lat, event.lng)} km away
@@ -3508,5 +3919,44 @@ const BottomNav = ({ currentScreen, setCurrentScreen }) => (
     </button>
   </div>
 );
+
+{/* ================ AudioBubble component ================ */}
+const AudioBubble = ({ url, isMine }) => {
+  const audioRefLocal = React.useRef(null);
+  const [isPlayingLocal, setIsPlayingLocal] = React.useState(false);
+  const [durationLocal, setDurationLocal] = React.useState(null);
+
+  React.useEffect(() => {
+    const a = audioRefLocal.current;
+    if (!a) return;
+    const onLoaded = () => setDurationLocal(a.duration);
+    const onEnded = () => setIsPlayingLocal(false);
+    a.addEventListener('loadedmetadata', onLoaded);
+    a.addEventListener('ended', onEnded);
+    return () => {
+      a.removeEventListener('loadedmetadata', onLoaded);
+      a.removeEventListener('ended', onEnded);
+    };
+  }, [url]);
+
+  const togglePlayLocal = () => {
+    const a = audioRefLocal.current;
+    if (!a) return;
+    if (isPlayingLocal) { a.pause(); setIsPlayingLocal(false); }
+    else { a.play().catch(e => console.warn('play failed', e)); setIsPlayingLocal(true); }
+  };
+
+  const timeLabel = durationLocal ? `${Math.floor(durationLocal)}s` : '...';
+
+  return (
+    <div className={`p-2 rounded-lg inline-flex items-center gap-3 ${isMine ? 'bg-blue-500 text-white' : 'bg-gray-700 text-white'}`}>
+      <button onClick={togglePlayLocal} className="w-9 h-9 rounded-full bg-white bg-opacity-20 flex items-center justify-center">
+        {isPlayingLocal ? '⏸' : '▶'}
+      </button>
+      <div className="text-sm opacity-90">{timeLabel}</div>
+      <audio ref={audioRefLocal} src={url} className="hidden" />
+    </div>
+  );
+};
 
 export default App;
