@@ -51,26 +51,6 @@ async function requestMobilePermissions() {
   }
 }
 
-
-async function requestCameraAndMicPermissions() {
-  if (!Capacitor.isNativePlatform()) return;
-
-  try {
-    // CAMERA & GALLERY
-    await Camera.requestPermissions({
-      permissions: ["camera", "photos"]
-    });
-
-    // MICROPHONE
-    await navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(() => console.log("Microphone granted"))
-      .catch(err => console.log("Microphone denied:", err));
-
-  } catch (err) {
-    console.log("Permission request failed:", err);
-  }
-}
-
 async function getCurrentPositionSafe() {
   if (!Capacitor.isNativePlatform()) {
     return new Promise((resolve, reject) => {
@@ -89,7 +69,6 @@ L.Icon.Default.mergeOptions({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
-
 
 
 // 🔎 Reverse-geocode exact address from lat/lng
@@ -152,15 +131,6 @@ const App = () => {
   const [activeEventTab, setActiveEventTab] = useState('updates');
  // Chat/media/recording state (add near your existing chat state block)
 const [recording, setRecording] = useState(false);
-
-const [pushToTalkHintVisible, setPushToTalkHintVisible] = useState(false);
-const showPushToTalkHint = () => { 
-  if (!pushToTalkHintVisible) { 
-    setPushToTalkHintVisible(true); 
-    setTimeout(() => setPushToTalkHintVisible(false), 2500); 
-  } 
-};
-
 const mediaRecorderRef = useRef(null);
 const recordedChunksRef = useRef([]);
 const chatFileInputRef = useRef(null); // hidden file input for chat uploads
@@ -212,28 +182,6 @@ const deleteMediaItem = async (eventId, mediaObj) => {
     console.error("deleteMediaItem failed:", err);
   }
 };
-
-// --- Instagram Style Media Picker (states) ---
-const [showMediaPicker, setShowMediaPicker] = useState(false);
-const [galleryPhotos, setGalleryPhotos] = useState([]);
-
-const openMediaPicker = () => setShowMediaPicker(true);
-const closeMediaPicker = () => setShowMediaPicker(false);
-
-// TEMP mock (Instagram grid). Later we replace with Capacitor Media API.
-useEffect(() => {
-  setGalleryPhotos([
-    "https://picsum.photos/200?1",
-    "https://picsum.photos/200?2",
-    "https://picsum.photos/200?3",
-    "https://picsum.photos/200?4",
-    "https://picsum.photos/200?5",
-    "https://picsum.photos/200?6",
-    "https://picsum.photos/200?7",
-    "https://picsum.photos/200?8",
-    "https://picsum.photos/200?9"
-  ]);
-}, []);
 
 useEffect(() => {
   if (!selectedEvent?.id) return;
@@ -548,7 +496,6 @@ useEffect(() => {
   // Run only on native app (Android/iOS), NOT on laptop web version
   if (Capacitor.getPlatform() !== 'web') {
     requestMobilePermissions();
-    requestCameraAndMicPermissions();
   }
 }, []);
 
@@ -656,12 +603,14 @@ useEffect(() => {
       return null;
     }
   };
-  // Starts a MediaRecorder for microphone
-const startAudioRecording = async () => {
+// Starts a MediaRecorder for microphone
+const startAudioRecording = async (streamFromButton) => {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream =
+      streamFromButton || (await navigator.mediaDevices.getUserMedia({ audio: true }));
+
     recordedChunksRef.current = [];
-    const options = { mimeType: 'audio/webm' };
+    const options = { mimeType: "audio/webm" };
     const mr = new MediaRecorder(stream, options);
 
     mr.ondataavailable = (e) => {
@@ -669,18 +618,17 @@ const startAudioRecording = async () => {
     };
 
     mr.onstop = async () => {
-      const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
-      await uploadAndSendMedia(blob, 'audio');
-      // stop all tracks to release mic
-      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+      await uploadAndSendMedia(blob, "audio");
+      stream.getTracks().forEach((t) => t.stop());
     };
 
     mediaRecorderRef.current = mr;
     mr.start();
     setRecording(true);
   } catch (err) {
-    console.error('Audio record start failed', err);
-    alert('Unable to access microphone.');
+    console.error("Recording failed:", err);
+    alert("Unable to access microphone.");
     setRecording(false);
   }
 };
@@ -2601,289 +2549,172 @@ if (currentScreen === 'navigation' && selectedResource) {
             )}
 
                             {/* ================= CHAT TAB ================= */}
-                {activeEventTab === "chat" && (
-                  <div className="bg-black text-white rounded-2xl p-4 flex flex-col" style={{ minHeight: "60vh" }}>
-                    
-                    {/* Header */}
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-bold">Event Chat</h3>
-                      <button
-                        onClick={() => setIsChatMaximized(prev => !prev)}
-                        className="px-2 py-1 bg-gray-800 rounded"
-                      >
-                        {isChatMaximized ? "Minimize" : "Maximize"}
-                      </button>
-                    </div>
+                            {activeEventTab === "chat" && (
+  <div className="bg-black text-white rounded-2xl p-4 flex flex-col" style={{ minHeight: "60vh" }}>
 
-                    {/* Messages */}
-                    <div className="bg-gray-900 rounded-lg p-3 mb-3 overflow-y-auto flex-1 min-h-0">
-                      {(!eventMessages || eventMessages.length === 0) ? (
-                        <p className="text-sm text-gray-300 text-center py-4">No messages yet.</p>
-                      ) : (
-                        eventMessages.map((msg, i) => {
-                          const isMine = msg.userId === auth.currentUser?.uid || msg.sender === "You";
-                          const timeStr = msg.timestamp
-                            ? (msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp))
-                                .toLocaleString("en-GB", {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                  day: "2-digit",
-                                  month: "short",
-                                })
-                            : "";
-
-                          return (
-                            <div key={i} className={`mb-3 flex ${isMine ? "justify-end" : "justify-start"}`}>
-                              <div className={`inline-block max-w-[80%] rounded-lg p-3 ${isMine ? "bg-blue-500 text-white" : "bg-gray-700 text-white"}`}>
-                                
-                                {/* Sender */}
-                                <div className="text-xs font-semibold mb-1">
-                                  {msg.sender} {msg.isVolunteer ? "(Volunteer)" : "(Bystander)"}
-                                </div>
-
-                                {/* TEXT */}
-                                {msg.text && <div className="text-sm mb-1">{msg.text}</div>}
-
-                                {/* IMAGE */}
-                                {msg.media?.type === "image" && (
-                                  <img
-                                    src={msg.media.url}
-                                    className="mt-2 rounded-lg"
-                                    style={{ maxWidth: "180px", maxHeight: "180px", objectFit: "cover" }}
-                                    alt=""
-                                  />
-                                )}
-
-                                {/* VIDEO */}
-                                {msg.media?.type === "video" && (
-                                  <video
-                                    src={msg.media.url}
-                                    controls
-                                    className="mt-2 rounded-lg"
-                                    style={{ maxWidth: "200px" }}
-                                  />
-                                )}
-
-                                {/* AUDIO */}
-                                {msg.media?.type === "audio" && (
-                                  <audio src={msg.media.url} controls className="mt-2 w-full" />
-                                )}
-
-                                {/* Time */}
-                                <div className="text-xs opacity-75 mt-2 text-right">{timeStr}</div>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-
-                      {/* Typing indicator */}
-                      {isTyping && (
-                        <div className="text-left mt-1">
-                          <div className="inline-block bg-gray-700 text-white px-3 py-1 rounded-lg text-xs opacity-80 animate-pulse">
-                            Someone is typing…
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Input Row */}
-                    <div className="p-3 border-t bg-white flex items-center gap-2">
-
-                      {/* Record button */}
-                      <button
-                        onMouseDown={startAudioRecording}
-                        onMouseUp={stopAudioRecording}
-                        onTouchStart={startAudioRecording}
-                        onTouchEnd={stopAudioRecording}
-                        className={`p-2 rounded-lg ${recording ? "bg-red-400 text-white" : "bg-gray-200"}`}
-                      >
-                        {recording ? "● REC" : "🎤"}
-                      </button>
-
-                      {/* Stop button */}
-                      <button
-                        onClick={stopAudioRecording}
-                        className="p-2 rounded-lg bg-red-500 text-white"
-                      >
-                        ⏹
-                      </button>
-
-                      {/* File upload */}
-                      <button
-                        onClick={() => { if (isMobile) openMediaPicker(); else chatFileInputRef.current?.click(); }}
-                        className="p-2 rounded-lg bg-gray-200"
-                      >
-                        📎
-                      </button>
-
-                      {/* Message input */}
-                      <input
-                        type="text"
-                        value={currentChatMessage}
-                        onChange={(e) => setCurrentChatMessage(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && sendTextMessage(selectedEvent.id)}
-                        placeholder="Type a message…"
-                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg bg-white text-black"
-                      />
-
-                      {/* Send button */}
-                      <button
-                        onClick={() => sendTextMessage(selectedEvent.id)}
-                        className="bg-blue-500 text-white px-4 py-2 rounded-lg"
-                      >
-                        Send
-                      </button>
-                    </div>
-
-                    {/* Hidden file input (DESKTOP ONLY) */}
-                      {!isMobile && (
-                        <input
-                          ref={chatFileInputRef}
-                          type="file"
-                          accept="image/*,video/*,audio/*"
-                          capture="environment"
-                          className="hidden"
-                          onChange={async (e) => {
-                            const f = e.target.files?.[0];
-                            if (!f) return;
-
-                            let type = "image";
-                            if (f.type.startsWith("video")) type = "video";
-                            if (f.type.startsWith("audio")) type = "audio";
-
-                            await uploadAndSendMedia(f, type);
-                            e.target.value = null;
-                          }}
-                        />
-                      )}
-                  </div>
-                )}
-                                {/* --- Instagram-style Media Picker Modal (mobile only) --- */}
-                                {isMobile && showMediaPicker && (
-                  <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-end justify-center">
-                    <div className="bg-white w-full rounded-t-3xl p-4 max-h-[75vh] overflow-y-auto">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-bold text-lg">Select Media</h3>
-                        <button onClick={closeMediaPicker} className="text-2xl">×</button>
-                      </div>
-
-                      {/* Camera tile */}
-                      <div className="grid grid-cols-3 gap-3 mb-3">
-                        <button
-                          className="h-24 bg-gray-200 rounded-lg flex items-center justify-center text-3xl"
-                          onClick={async () => {
-                            try {
-                              const photo = await Camera.getPhoto({ quality: 70, allowEditing: false, resultType: 'uri', source: 'camera' });
-                              const blob = await fetch(photo.webPath).then(r => r.blob());
-                              await uploadAndSendMedia(blob, 'image');
-                              closeMediaPicker();
-                            } catch (err) {
-                              console.log('Camera cancelled or failed', err);
-                            }
-                          }}
-                        >
-                          📷
-                        </button>
-
-                        {/* filler tiles to keep layout even */}
-                        <div className="h-24 rounded-lg bg-transparent" />
-                        <div className="h-24 rounded-lg bg-transparent" />
-                      </div>
-
-                      {/* Gallery grid (uses galleryPhotos state) */}
-                      <div className="grid grid-cols-3 gap-2">
-                        {galleryPhotos.map((src, idx) => (
-                          <button
-                            key={idx}
-                            className="h-28 bg-gray-100 rounded-lg overflow-hidden"
-                            onClick={async () => {
-                              try {
-                                const blob = await fetch(src).then(r => r.blob());
-                                await uploadAndSendMedia(blob, 'image');
-                                closeMediaPicker();
-                              } catch (err) {
-                                console.warn('Failed to pick gallery image', err);
-                              }
-                            }}
-                          >
-                            <img src={src} className="w-full h-full object-cover" />
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="mt-4">
-                        <button onClick={closeMediaPicker} className="w-full bg-gray-200 py-2 rounded-lg">Cancel</button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-{activeEventTab === 'media' && (
-  <div id="mediaSection" className="bg-black text-white rounded-2xl p-4 space-y-4">
-    <h3 className="font-bold mb-2">Event Media</h3>
-
-    {selectedEvent.mediaFiles?.length > 0 ? (
-      <div className="grid grid-cols-3 md:grid-cols-4 gap-2">
-        {selectedEvent.mediaFiles.map((media, idx) => (
-          <div
-            key={idx}
-            className="relative overflow-hidden cursor-pointer aspect-square flex items-center justify-center"
-            onClick={() => {
-              setFullscreenMediaIndex(idx);
-              setShowFullscreenMedia(true);
-            }}
-          >
-            {/* IMAGE THUMBNAIL (reduced size) */}
-            {media.type === 'image' ? (
-              <img
-                src={media.url}
-                alt="event-media"
-                className="w-full h-full object-cover"
-                style={{ maxWidth: '300px', maxHeight: '300px' }}
-              />
-
-            ) : media.type === 'audio' ? (
-              /* AUDIO THUMBNAIL - show small bubble with play button */
-              <div className="p-3 w-full flex items-center justify-center">
-                <AudioBubble url={media.url} isMine={false} />
-              </div>
-
-            ) : (
-              /* VIDEO THUMBNAIL (no autoplay) */
-              <video src={media.url} className="w-full h-full object-cover" />
-            )}
-
-            {/* NOTE: delete moved to slideshow (no overlay here) */}
-          </div>
-        ))}
+    {/* Push-to-Talk Popup */}
+    {recording && (
+      <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+        <div className="bg-white px-6 py-4 rounded-2xl shadow-lg text-center">
+          <p className="font-semibold text-lg">Push-to-Talk Active</p>
+          <p className="text-sm text-gray-600 mt-1">Hold to record — release to stop</p>
+        </div>
       </div>
-    ) : (
-      <p className="text-gray-300 text-sm">No media uploaded yet.</p>
     )}
 
-    <button onClick={() => { if (isMobile) openMediaPicker(); else document.getElementById('addMoreMediaInput').click(); }} className="w-full bg-white text-black border border-gray-300 rounded-lg p-3 flex items-center justify-center gap-2">
-      <Upload className="w-5 h-5" /> Add More Media
-    </button>
+    {/* Header */}
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="font-bold">Event Chat</h3>
+      <button
+        onClick={() => setIsChatMaximized(prev => !prev)}
+        className="px-2 py-1 bg-gray-800 rounded"
+      >
+        {isChatMaximized ? "Minimize" : "Maximize"}
+      </button>
+    </div>
 
-    {/* Only render the hidden input on desktop */}
-    {!isMobile && (
-      <input
-        id="addMoreMediaInput"
-        type="file"
-        accept="image/*,video/*,audio/*"
-        multiple
-        className="hidden"
-        onChange={async (e) => {
-          const files = Array.from(e.target.files || []);
-          for (const f of files) {
-            const type = f.type.startsWith('video') ? 'video' : f.type.startsWith('audio') ? 'audio' : 'image';
-            await uploadAndSendMedia(f, type);
-          }
-          e.target.value = null;
-        }}
-      />
-    )}
+    {/* Messages */}
+    <div className="bg-gray-900 rounded-lg p-3 mb-3 overflow-y-auto flex-1 min-h-0">
+      {(!eventMessages || eventMessages.length === 0) ? (
+        <p className="text-sm text-gray-300 text-center py-4">No messages yet.</p>
+      ) : (
+        eventMessages.map((msg, i) => {
+          const isMine = msg.userId === auth.currentUser?.uid || msg.sender === "You";
+          const timeStr = msg.timestamp
+            ? (msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp))
+                .toLocaleString("en-GB", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  day: "2-digit",
+                  month: "short",
+                })
+            : "";
+
+          return (
+            <div key={i} className={`mb-3 flex ${isMine ? "justify-end" : "justify-start"}`}>
+              <div className={`inline-block max-w-[80%] rounded-lg p-3 ${isMine ? "bg-blue-500 text-white" : "bg-gray-700 text-white"}`}>
+                <div className="text-xs font-semibold mb-1">
+                  {msg.sender} {msg.isVolunteer ? "(Volunteer)" : "(Bystander)"}
+                </div>
+
+                {msg.text && <div className="text-sm mb-1">{msg.text}</div>}
+
+                {msg.media?.type === "image" && (
+                  <img
+                    src={msg.media.url}
+                    className="mt-2 rounded-lg"
+                    style={{ maxWidth: "180px", maxHeight: "180px", objectFit: "cover" }}
+                    alt=""
+                  />
+                )}
+
+                {msg.media?.type === "video" && (
+                  <video
+                    src={msg.media.url}
+                    controls
+                    className="mt-2 rounded-lg"
+                    style={{ maxWidth: "200px" }}
+                  />
+                )}
+
+                {msg.media?.type === "audio" && (
+                  <audio src={msg.media.url} controls className="mt-2 w-full" />
+                )}
+
+                <div className="text-xs opacity-75 mt-2 text-right">{timeStr}</div>
+              </div>
+            </div>
+          );
+        })
+      )}
+
+      {isTyping && (
+        <div className="text-left mt-1">
+          <div className="inline-block bg-gray-700 text-white px-3 py-1 rounded-lg text-xs opacity-80 animate-pulse">
+            Someone is typing…
+          </div>
+        </div>
+      )}
+    </div>
+
+    {/* Input Row */}
+<div className="flex items-center gap-2 p-2 bg-white border-t">
+
+{/* Push-to-talk mic */}
+<button
+  onMouseDown={async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      startAudioRecording(stream);
+    } catch (err) {
+      alert("Microphone permission is required to record audio.");
+    }
+  }}
+  onMouseUp={stopAudioRecording}
+  onTouchStart={async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      startAudioRecording(stream);
+    } catch (err) {
+      alert("Microphone permission is required to record audio.");
+    }
+  }}
+  onTouchEnd={stopAudioRecording}
+  className={`p-2 rounded-full ${
+    recording ? "bg-red-500 text-white" : "bg-gray-200"
+  }`}
+>
+  🎤
+</button>
+
+{/* File upload */}
+<button
+  onClick={() => chatFileInputRef.current?.click()}
+  className="p-2 rounded-full bg-gray-200"
+>
+  📎
+</button>
+
+{/* Input + Send combined box */}
+<div className="flex items-center flex-1 bg-gray-100 rounded-xl px-3 py-2 border border-gray-300">
+
+  <input
+    type="text"
+    value={currentChatMessage}
+    onChange={(e) => setCurrentChatMessage(e.target.value)}
+    onKeyDown={(e) => e.key === "Enter" && sendTextMessage(selectedEvent.id)}
+    placeholder="Type a message…"
+    className="flex-1 bg-transparent text-black text-sm outline-none"
+  />
+
+  <button
+    onClick={() => sendTextMessage(selectedEvent.id)}
+    className="bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm ml-2"
+  >
+    Send
+  </button>
+
+</div>
+</div>
+
+{/* Hidden file input */}
+<input
+ref={chatFileInputRef}
+type="file"
+accept="image/*,video/*,audio/*"
+className="hidden"
+onChange={async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+
+  let type = "image";
+  if (f.type.startsWith("video")) type = "video";
+  if (f.type.startsWith("audio")) type = "audio";
+
+  await uploadAndSendMedia(f, type);
+  e.target.value = null;
+}}
+/>
 
     {/* ============ Fullscreen Slideshow Modal ============ */}
     {showFullscreenMedia && selectedEvent && (
@@ -3045,8 +2876,8 @@ if (currentScreen === 'navigation' && selectedResource) {
       <>
       <div className="min-h-screen bg-gray-50">
         <Header title="Create Event" onBack={() => setCurrentScreen('home')} />
-        <div className="p-4 space-y-4 pb-4">
-          <div className="bg-white rounded-2xl p-4 space-y-2">
+        <div className="p-4 space-y-4 pb-24">
+          <div className="bg-white rounded-2xl p-4 space-y-4">
             <div>
               <label className="block text-sm font-semibold mb-2">Incident Type</label>
               <select
@@ -3122,44 +2953,61 @@ if (currentScreen === 'navigation' && selectedResource) {
             {/* Upload Media */}
             <div>
               <label className="block text-sm font-semibold mb-2">Upload Media</label>
-
-              {/* MOBILE → Instagram Picker */}
-              <button
-                onClick={() => {
-                  if (isMobile) openMediaPicker();
-                  else document.getElementById("createEventDesktopInput").click();
-                }}
-                className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
-              >
-                <Upload className="w-5 h-5" />
-                <span>Add Photos / Videos</span>
-              </button>
-
-              {/* DESKTOP ONLY */}
-              {!isMobile && (
+  
+              <div className="space-y-2">
+  
+                {/* IMAGES */}
+                <button
+                  onClick={() => document.getElementById("eventImageInput").click()}
+                  className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
+                >
+                  <Camera className="w-5 h-5" />
+                  <span>Add Photos</span>
+                </button>
                 <input
-                  id="createEventDesktopInput"
+                  id="eventImageInput"
                   type="file"
-                  accept="image/*,video/*"
+                  accept="image/*"
                   multiple
                   className="hidden"
                   onChange={(e) => {
-                    const files = Array.from(e.target.files || []);
+                    const files = Array.from(e.target.files);
                     setNewEventForm({
                       ...newEventForm,
                       mediaFiles: [
                         ...newEventForm.mediaFiles,
-                        ...files.map((f) => ({
-                          type: f.type.startsWith("video") ? "video" : "image",
-                          file: f
-                        }))
-                      ]
+                        ...files.map((f) => ({ type: "image", file: f })),
+                      ],
                     });
-                    e.target.value = null;
                   }}
                 />
-              )}
-            </div>
+  
+                {/* VIDEOS */}
+                <button
+                  onClick={() => document.getElementById("eventVideoInput").click()}
+                  className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
+                >
+                  <Video className="w-5 h-5" />
+                  <span>Add Videos</span>
+                </button>
+                <input
+                  id="eventVideoInput"
+                  type="file"
+                  accept="video/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files);
+                    setNewEventForm({
+                      ...newEventForm,
+                      mediaFiles: [
+                        ...newEventForm.mediaFiles,
+                        ...files.map((f) => ({ type: "video", file: f })),
+                      ],
+                    });
+                  }}
+                />
+              </div>
   
               {/* PREVIEW SELECTED FILES */}
               {newEventForm.mediaFiles.length > 0 && (
@@ -3306,8 +3154,9 @@ if (currentScreen === 'navigation' && selectedResource) {
             Create Event
           </button>
         </div>
-        <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
-      </>
+      </div>
+      <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
+  </>
     );
   }
   
@@ -3318,7 +3167,7 @@ if (currentScreen === 'navigation' && selectedResource) {
           setEditingEvent(null);
           setCurrentScreen('eventDetail');
         }} />
-        <div className="p-4 pb-24">
+        <div className="p-4 space-y-4 pb-24">
           <div className="bg-white rounded-2xl p-4 space-y-4">
             <div>
               <label className="block text-sm font-semibold mb-2">Incident Type</label>
@@ -4058,7 +3907,5 @@ const AudioBubble = ({ url, isMine }) => {
     </div>
   );
 };
-
-
 
 export default App;
