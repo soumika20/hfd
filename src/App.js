@@ -70,6 +70,65 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
+const GOOGLE_MAPS_API_KEY = 'AIzaSyBcGvvgO9edsyIS5tpGoZ_ZIjV9pc2_Fvk';
+
+const decodePolyline = (encoded) => {
+  const poly = [];
+  let index = 0, len = encoded.length;
+  let lat = 0, lng = 0;
+
+  while (index < len) {
+    let b, shift = 0, result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+    lng += dlng;
+
+    poly.push([lat / 1e5, lng / 1e5]);
+  }
+  return poly;
+};
+
+const fetchRoute = async (startLat, startLng, endLat, endLng) => {
+  try {
+    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'AIzaSyBcGvvgO9edsyIS5tpGoZ_ZIjV9pc2_Fvk') {
+      console.warn('Google Maps API key not configured. Using direct line.');
+      return [[startLat, startLng], [endLat, endLng]];
+    }
+
+    const response = await fetch(
+      `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`
+    );
+    const data = await response.json();
+    
+    if (data.status === 'OK' && data.routes && data.routes[0]) {
+      // Decode polyline from Google Directions
+      const polyline = data.routes[0].overview_polyline.points;
+      const coords = decodePolyline(polyline);
+      console.log('✓ Route fetched successfully from Google Maps');
+      return coords;
+    } else {
+      console.warn('Google Directions failed:', data.status);
+      return [[startLat, startLng], [endLat, endLng]];
+    }
+  } catch (error) {
+    console.error('Route fetch failed, using direct line:', error);
+    return [[startLat, startLng], [endLat, endLng]];
+  }
+};
 
 // Reverse-geocode exact address from lat/lng
 
@@ -144,6 +203,9 @@ const [recording, setRecording] = useState(false);
 const mediaRecorderRef = useRef(null);
 const recordedChunksRef = useRef([]);
 const chatFileInputRef = useRef(null); // hidden file input for chat uploads
+
+const [nearbyResources, setNearbyResources] = useState([]);
+const [selectedResource, setSelectedResource] = useState(null);
 
 const deleteMediaItem = async (eventId, mediaObj) => {
   if (!mediaObj) return;
@@ -500,64 +562,9 @@ useEffect(() => {
   return () => window.removeEventListener('click', onDocClick);
 }, [contextMenu.visible]);
 
-const fetchRoute = async (startLat, startLng, endLat, endLng) => {
-  try {
-    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'AIzaSyBcGvvgO9edsyIS5tpGoZ_ZIjV9pc2_Fvk') {
-      console.warn('Google Maps API key not configured. Using direct line.');
-      return [[startLat, startLng], [endLat, endLng]];
-    }
-
-    const response = await fetch(
-      `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`
-    );
-    const data = await response.json();
-    
-    if (data.status === 'OK' && data.routes && data.routes[0]) {
-      // Decode polyline from Google Directions
-      const polyline = data.routes[0].overview_polyline.points;
-      const coords = decodePolyline(polyline);
-      console.log('✓ Route fetched successfully from Google Maps');
-      return coords;
-    } else {
-      console.warn('Google Directions failed:', data.status);
-      return [[startLat, startLng], [endLat, endLng]];
-    }
-  } catch (error) {
-    console.error('Route fetch failed, using direct line:', error);
-    return [[startLat, startLng], [endLat, endLng]];
-  }
-};
 
 // Decode Google's polyline format
-const decodePolyline = (encoded) => {
-  const poly = [];
-  let index = 0, len = encoded.length;
-  let lat = 0, lng = 0;
 
-  while (index < len) {
-    let b, shift = 0, result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lat += dlat;
-
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lng += dlng;
-
-    poly.push([lat / 1e5, lng / 1e5]);
-  }
-  return poly;
-};
 
 const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
   if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'AIzaSyBcGvvgO9edsyIS5tpGoZ_ZIjV9pc2_Fvk') {
@@ -608,8 +615,7 @@ const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
 
 
 // Add state for nearby resources
-const [nearbyResources, setNearbyResources] = useState([]);
-const [selectedResource, setSelectedResource] = useState(null);
+
 
 useEffect(() => {
   // Run only on native app (Android/iOS), NOT on laptop web version
@@ -676,7 +682,6 @@ useEffect(() => {
 
   const WEATHER_API_KEY = 'bf8edeaa51844f2caad151032252110';
   const GEOAPIFY_API_KEY = '6a5a6eee4fb44c20bee69310910f4bdc';
-  const GOOGLE_MAPS_API_KEY = 'AIzaSyBcGvvgO9edsyIS5tpGoZ_ZIjV9pc2_Fvk'
 
 
   // --- Firebase init & centralized upload helper ---
@@ -2589,10 +2594,10 @@ if (currentScreen === 'navigation' && selectedResource) {
       const routeCoords = await fetchRoute(
         userLocation.lat, 
         userLocation.lng, 
-        resource.lat, 
-        resource.lng
+        selectedEvent.lat, 
+        selectedEvent.lng
       );
-      setEmergencyRoutes([{ resource, route: routeCoords }]);
+      setEmergencyRoutes([{ resource: selectedEvent, route: routeCoords }]);
       setShowEmergencyRoutes(true);
     }}
     className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600"
@@ -2601,7 +2606,7 @@ if (currentScreen === 'navigation' && selectedResource) {
   </button>
   <button 
     onClick={() => {
-      setSelectedResource(resource);
+      setSelectedResource(selectedEvent);
       setCurrentScreen('navigation');
     }}
     className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition-colors"
@@ -3081,9 +3086,9 @@ if (currentScreen === 'navigation' && selectedResource) {
             </div>
           )}
         </div>
-        
         <BottomNav currentScreen="createdEvents" setCurrentScreen={setCurrentScreen} />
       </div>
+    </div>
     );
   }
 
