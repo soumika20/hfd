@@ -70,7 +70,8 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const GOOGLE_MAPS_API_KEY = 'AIzaSyBcGvvgO9edsyIS5tpGoZ_ZIjV9pc2_Fvk';
+const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+const WEATHER_API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
 
 const decodePolyline = (encoded) => {
   const poly = [];
@@ -679,10 +680,6 @@ useEffect(() => {
       setMediaFiles(selectedEvent.mediaFiles || []);
     }
   }, [currentScreen, selectedEvent]);
-
-  const WEATHER_API_KEY = 'bf8edeaa51844f2caad151032252110';
-  const GEOAPIFY_API_KEY = '6a5a6eee4fb44c20bee69310910f4bdc';
-
 
   // --- Firebase init & centralized upload helper ---
   // Replace these firebaseConfig values with your project's config in production
