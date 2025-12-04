@@ -106,32 +106,26 @@ const decodePolyline = (encoded) => {
 
 const fetchRoute = async (startLat, startLng, endLat, endLng) => {
   try {
-    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'AIzaSyBcGvvgO9edsyIS5tpGoZ_ZIjV9pc2_Fvk') {
-      console.warn('Google Maps API key not configured. Using direct line.');
-      return [[startLat, startLng], [endLat, endLng]];
-    }
-
+    // Use your API route instead of direct call
     const response = await fetch(
-      `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`
+      `/api/directions?startLat=${startLat}&startLng=${startLng}&endLat=${endLat}&endLng=${endLng}`
     );
     const data = await response.json();
     
     if (data.status === 'OK' && data.routes && data.routes[0]) {
-      // Decode polyline from Google Directions
       const polyline = data.routes[0].overview_polyline.points;
       const coords = decodePolyline(polyline);
-      console.log('✓ Route fetched successfully from Google Maps');
+      console.log('✓ Route fetched successfully');
       return coords;
     } else {
-      console.warn('Google Directions failed:', data.status);
+      console.warn('Directions API failed:', data.status);
       return [[startLat, startLng], [endLat, endLng]];
     }
   } catch (error) {
-    console.error('Route fetch failed, using direct line:', error);
+    console.error('Route fetch failed:', error);
     return [[startLat, startLng], [endLat, endLng]];
   }
 };
-
 // Reverse-geocode exact address from lat/lng
 
 const fetchExactAddress = async (lat, lng) => {
@@ -378,8 +372,13 @@ const sendTextMessage = async (eventId) => {
 
   setCurrentChatMessage('');
 };
-
+	
 const toggleMessageAsUpdate = async (eventId, messageId, message) => {
+  if (!messageId) {
+    console.error('Message ID is undefined');
+    return;
+  }
+
   try {
     const updateRef = doc(db, "createdEvents", eventId, "updates", messageId);
     const isStarred = (eventUpdates[eventId] || []).some(u => u.id === messageId);
@@ -387,22 +386,21 @@ const toggleMessageAsUpdate = async (eventId, messageId, message) => {
     if (isStarred) {
       // Remove from updates
       await deleteDoc(updateRef);
-      setEventUpdates(prev => ({
-        ...prev,
-        [eventId]: (prev[eventId] || []).filter(u => u.id !== messageId)
-      }));
     } else {
-      // Add to updates
+      // Add to updates with proper timestamp handling
       await setDoc(updateRef, {
         text: message.text,
         sender: message.sender,
-        timestamp: message.timestamp || serverTimestamp(),
+        timestamp: message.timestamp instanceof Date 
+          ? message.timestamp 
+          : serverTimestamp(),
         type: 'chat',
         messageId: messageId
       });
     }
   } catch (err) {
     console.error("Failed to toggle update:", err);
+    alert("Failed to update. Check console.");
   }
 };
 
@@ -2587,21 +2585,43 @@ if (currentScreen === 'navigation' && selectedResource) {
 
                 <div className="flex gap-2">
   <button 
-    onClick={async () => {
-      // Fetch and show route for this specific resource
+  onClick={async () => {
+    console.log('Fetching route from', userLocation, 'to', selectedEvent);
+    
+    try {
       const routeCoords = await fetchRoute(
         userLocation.lat, 
         userLocation.lng, 
         selectedEvent.lat, 
         selectedEvent.lng
       );
-      setEmergencyRoutes([{ resource: selectedEvent, route: routeCoords }]);
-      setShowEmergencyRoutes(true);
-    }}
-    className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600"
-  >
-    <MapPin className="w-5 h-5" />
-  </button>
+      
+      console.log('Route fetched:', routeCoords.length, 'coordinates');
+      
+      if (routeCoords.length > 0) {
+        setEmergencyRoutes([{ 
+          resource: selectedEvent, 
+          route: routeCoords 
+        }]);
+        setShowEmergencyRoutes(true);
+      } else {
+        alert('Could not fetch route. Using direct line.');
+        setEmergencyRoutes([{
+          resource: selectedEvent,
+          route: [[userLocation.lat, userLocation.lng], [selectedEvent.lat, selectedEvent.lng]]
+        }]);
+        setShowEmergencyRoutes(true);
+      }
+    } catch (err) {
+      console.error('Route fetch error:', err);
+      alert('Failed to fetch route');
+    }
+  }}
+  className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600"
+>
+  <MapPin className="w-5 h-5" />
+</button>
+	  
   <button 
     onClick={() => {
       setSelectedResource(selectedEvent);
@@ -4114,22 +4134,60 @@ const BottomNav = ({ currentScreen, setCurrentScreen }) => (
 
 const RouteDisplay = ({ start, end }) => {
   const [route, setRoute] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
   const map = useMap();
 
   React.useEffect(() => {
-    fetchRoute(start[0], start[1], end[0], end[1])
-      .then(coords => {
+    const loadRoute = async () => {
+      setLoading(true);
+      try {
+        const coords = await fetchRoute(start[0], start[1], end[0], end[1]);
+        console.log('Route loaded:', coords.length, 'points');
         setRoute(coords);
+        
         if (coords.length > 2) {
           const bounds = L.latLngBounds(coords);
           map.fitBounds(bounds, { padding: [50, 50] });
         }
-      });
-  }, [start, end, map]);
+      } catch (err) {
+        console.error('Route loading error:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadRoute();
+  }, [start[0], start[1], end[0], end[1], map]);
+
+  if (loading) {
+    return (
+      <Circle 
+        center={start} 
+        radius={100} 
+        color="#3B82F6" 
+        fillOpacity={0.3}
+      />
+    );
+  }
 
   if (route.length === 0) return null;
 
-  return <Polyline positions={route} color="#3B82F6" weight={4} />;
+  return (
+    <>
+      <Polyline 
+        positions={route} 
+        color="#3B82F6" 
+        weight={4}
+        dashArray="10, 5"
+      />
+      <Marker position={start} icon={createCustomIcon('#3B82F6')}>
+        <Popup>Start</Popup>
+      </Marker>
+      <Marker position={end} icon={createCustomIcon('#DC2626')}>
+        <Popup>Destination</Popup>
+      </Marker>
+    </>
+  );
 };
 
 
