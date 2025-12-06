@@ -9,6 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // imports...
+
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 
@@ -34,7 +35,6 @@ import {
   where,
 } from "firebase/firestore";
 
-// ---- Add this here ----
 async function requestMobilePermissions() {
   if (!Capacitor.isNativePlatform()) return;
 
@@ -70,63 +70,55 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-const WEATHER_API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
-const GEOAPIFY_API_KEY = process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY;
+const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+const WEATHER_API_KEY = process.env.REACT_APP_WEATHER_API_KEY;
+const GEOAPIFY_API_KEY = process.env.REACT_APP_GEOAPIFY_API_KEY;
 
-const decodePolyline = (encoded) => {
-  const poly = [];
-  let index = 0, len = encoded.length;
-  let lat = 0, lng = 0;
-
-  while (index < len) {
-    let b, shift = 0, result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lat += dlat;
-
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lng += dlng;
-
-    poly.push([lat / 1e5, lng / 1e5]);
-  }
-  return poly;
-};
+console.log('Google Maps API Key:', GOOGLE_MAPS_API_KEY ? 'Loaded ✓' : 'Missing ✗');
+console.log('Weather API Key:', WEATHER_API_KEY ? 'Loaded ✓' : 'Missing ✗');
+console.log('Geoapify API Key:', GEOAPIFY_API_KEY ? 'Loaded ✓' : 'Missing ✗');
 
 const fetchRoute = async (startLat, startLng, endLat, endLng) => {
   try {
-    // Use your API route instead of direct call
-    const response = await fetch(
-      `/api/directions?startLat=${startLat}&startLng=${startLng}&endLat=${endLat}&endLng=${endLng}`
-    );
-    const data = await response.json();
-    
-    if (data.status === 'OK' && data.routes && data.routes[0]) {
-      const polyline = data.routes[0].overview_polyline.points;
-      const coords = decodePolyline(polyline);
-      console.log('✓ Route fetched successfully');
-      return coords;
-    } else {
-      console.warn('Directions API failed:', data.status);
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.warn('No Google Maps API key');
       return [[startLat, startLng], [endLat, endLng]];
     }
+
+    // Wait for Google Maps to load
+    if (!window.google || !window.google.maps) {
+      console.warn("Google Maps not loaded yet");
+      return [[startLat, startLng], [endLat, endLng]];
+    }
+
+    // Use DirectionsService
+    const directionsService = new window.google.maps.DirectionsService();
+
+    return new Promise((resolve) => {
+      directionsService.route(
+        {
+          origin: { lat: startLat, lng: startLng },
+          destination: { lat: endLat, lng: endLng },
+          travelMode: window.google.maps.TravelMode.DRIVING
+        },
+        (result, status) => {
+          if (status === window.google.maps.DirectionsStatus.OK) {
+            const route = result.routes[0];
+            const path = route.overview_path.map(p => [p.lat(), p.lng()]);
+            console.log('✓ Route fetched successfully');
+            resolve(path);
+          } else {
+            console.warn('Directions API failed:', status);
+            resolve([[startLat, startLng], [endLat, endLng]]);
+          }
+        }
+      );
+    });
   } catch (error) {
     console.error('Route fetch failed:', error);
     return [[startLat, startLng], [endLat, endLng]];
   }
 };
-// Reverse-geocode exact address from lat/lng
 
 const fetchExactAddress = async (lat, lng) => {
   try {
@@ -158,6 +150,15 @@ const createCustomIcon = (color) => {
 };
 
 const App = () => {
+    React.useEffect(() => {
+    if (GOOGLE_MAPS_API_KEY && !window.google) {
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  }, []);
   const [currentScreen, setCurrentScreen] = useState('splash');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [mediaFiles, setMediaFiles] = useState([]);
@@ -563,59 +564,76 @@ useEffect(() => {
 }, [contextMenu.visible]);
 
 
-// Decode Google's polyline format
-
-
-const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
+const fetchNearbyPlaces = async (lat, lng, type, limit = 5) => {
   if (!GOOGLE_MAPS_API_KEY) {
-    console.warn('⚠️ Google Maps API key not configured. Using mock data.');
+    console.warn("Google Maps API Key missing – cannot fetch nearby places");
     return [];
   }
 
+  // Wait for Google Maps to load
+  if (!window.google || !window.google.maps) {
+    console.warn("Google Maps not loaded yet");
+    return [];
+  }
+
+  const typeMap = {
+    'healthcare.hospital': 'hospital',
+    'service.police': 'police',
+    'service.fire_station': 'fire_station',
+    'healthcare.pharmacy': 'pharmacy'
+  };
+
+  const googleType = typeMap[type] || 'hospital';
+
   try {
-    const radius = 5000; // 5km radius
-    
-    // Map types to Google Places types
-    const typeMapping = {
-      'healthcare.hospital': 'hospital',
-      'service.police': 'police',
-      'service.fire_station': 'fire_station',
-      'healthcare.pharmacy': 'pharmacy'
-    };
-    
-    const googleType = typeMapping[type] || type.split('.')[1] || 'hospital';
-    
-	const url = `/api/places?lat=${lat}&lng=${lng}&type=${googleType}&radius=${radius}`;    
-    console.log(`Fetching ${googleType} places...`);
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (data.status === 'OK' && data.results && data.results.length > 0) {
-      console.log(`✓ Found ${data.results.length} ${googleType} locations`);
-      return data.results.slice(0, limit).map((place, index) => ({
-        id: place.place_id,
-        name: place.name,
-        type: type.split('.')[0],
-        lat: place.geometry.location.lat,
-        lng: place.geometry.location.lng,
-        status: place.opening_hours?.open_now ? 'Open' : 'Available',
-        address: place.vicinity,
-        distance: calculateDistance(lat, lng, place.geometry.location.lat, place.geometry.location.lng)
-      }));
-    } else {
-      console.log(`No ${googleType} locations found`);
-      return [];
-    }
+    console.log(`Fetching ${googleType}s via Google Places API...`);
+
+    // Create a map instance (required for PlacesService)
+    const mapDiv = document.createElement('div');
+    const map = new window.google.maps.Map(mapDiv);
+
+    // Create PlacesService
+    const service = new window.google.maps.places.PlacesService(map);
+
+    // Make the request
+    return new Promise((resolve) => {
+      service.nearbySearch(
+        {
+          location: { lat, lng },
+          radius: 5000,
+          type: googleType
+        },
+        (results, status) => {
+          if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
+            const places = results.slice(0, limit).map(place => ({
+              id: `google-${place.place_id}`,
+              name: place.name || `${googleType.replace('_', ' ')}`,
+              type: type.split('.')[0],
+              lat: place.geometry.location.lat(),
+              lng: place.geometry.location.lng(),
+              address: place.vicinity || 'Address not available',
+              distance: calculateDistance(lat, lng, place.geometry.location.lat(), place.geometry.location.lng()),
+              phone: place.international_phone_number || null,
+              rating: place.rating || null,
+              photo: place.photos?.[0] ? place.photos[0].getUrl({ maxWidth: 400 }) : null,
+              status: place.business_status === 'OPERATIONAL' ? 'Open' : 'Closed'
+            }));
+            
+            console.log(`Found ${places.length} ${googleType}(s) via Google Places`);
+            resolve(places.sort((a, b) => a.distance - b.distance));
+          } else {
+            console.error('Google Places error:', status);
+            resolve([]);
+          }
+        }
+      );
+    });
   } catch (error) {
-    console.error(`Failed to fetch ${type} places:`, error);
+    console.error(`Failed to fetch ${googleType}s from Google Places:`, error);
     return [];
   }
 };
-
-
-// Add state for nearby resources
-
-
+  
 useEffect(() => {
   // Run only on native app (Android/iOS), NOT on laptop web version
   if (Capacitor.getPlatform() !== 'web') {
@@ -1151,156 +1169,88 @@ const requestMobileLocation = async () => {
 };
   
   useEffect(() => {
-    const fetchWeather = async () => {
-      if (!WEATHER_API_KEY) {
-        console.warn('⚠️ Weather API key not configured. Using mock data. Get your free key at https://www.weatherapi.com/');
-        setWeather({
-          temp: 28,
-          condition: 'Partly Cloudy',
-          humidity: 65,
-          windSpeed: 12,
-          feelsLike: 30
-        });
-        setWeatherAlerts([]);
-        return;
-      }
-
-      try {
-        console.log('Fetching live weather data from WeatherAPI.com...');
-        const weatherRes = await fetch(
-          `https://api.weatherapi.com/v1/forecast.json?key=${WEATHER_API_KEY}&q=${userLocation.lat},${userLocation.lng}&days=1&aqi=no&alerts=yes`
-        );
-        const weatherData = await weatherRes.json();
+  const fetchWeather = async () => {
+    try {
+      // Use Open-Meteo API (no key required!)
+      console.log('Fetching weather from Open-Meteo (no API key needed)...');
+      const weatherRes = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${userLocation.lat}&longitude=${userLocation.lng}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&timezone=auto`
+      );
+      const weatherData = await weatherRes.json();
+      
+      if (weatherData.current) {
+        // Map weather codes to conditions
+        const weatherConditions = {
+          0: 'Clear Sky',
+          1: 'Mainly Clear', 2: 'Partly Cloudy', 3: 'Overcast',
+          45: 'Foggy', 48: 'Foggy',
+          51: 'Light Drizzle', 53: 'Drizzle', 55: 'Heavy Drizzle',
+          61: 'Light Rain', 63: 'Rain', 65: 'Heavy Rain',
+          71: 'Light Snow', 73: 'Snow', 75: 'Heavy Snow',
+          95: 'Thunderstorm'
+        };
         
-        if (weatherData.error) {
-          console.error('Weather API Error:', weatherData.error.message);
-          throw new Error(weatherData.error.message);
-        }
+        const condition = weatherConditions[weatherData.current.weather_code] || 'Partly Cloudy';
         
-        console.log('✓ Live weather data loaded successfully');
+        console.log('✓ Weather data loaded from Open-Meteo');
         setWeather({
-          temp: Math.round(weatherData.current.temp_c),
-          condition: weatherData.current.condition.text,
-          humidity: weatherData.current.humidity,
-          windSpeed: Math.round(weatherData.current.wind_kph),
-          feelsLike: Math.round(weatherData.current.feelslike_c)
+          temp: Math.round(weatherData.current.temperature_2m),
+          condition: condition,
+          humidity: weatherData.current.relative_humidity_2m,
+          windSpeed: Math.round(weatherData.current.wind_speed_10m),
+          feelsLike: Math.round(weatherData.current.temperature_2m)
         });
-
-        if (weatherData.alerts && weatherData.alerts.alert && weatherData.alerts.alert.length > 0) {
-          console.log('⚠️ Active weather alerts found:', weatherData.alerts.alert.length);
-          setWeatherAlerts(weatherData.alerts.alert.map(alert => ({
-            type: alert.event || 'Weather Alert',
-            severity: alert.severity || 'Moderate',
-            category: alert.category || 'General',
-            headline: alert.headline || alert.event,
-            areas: alert.areas || 'Local area',
-            effective: alert.effective,
-            expires: alert.expires,
-            description: alert.desc || alert.instruction || 'Weather alert in effect.'
-          })));
+        
+        // Check for severe weather
+        if ([95, 96, 99].includes(weatherData.current.weather_code)) {
+          setWeatherAlerts([{
+            type: 'Severe Weather',
+            severity: 'High',
+            category: 'Thunderstorm',
+            headline: 'Thunderstorm Alert',
+            areas: 'Your area',
+            description: 'Severe weather detected in your area. Stay indoors if possible.'
+          }]);
         } else {
-          console.log('✓ No active weather alerts');
           setWeatherAlerts([]);
         }
-      } catch (error) {
-        console.error('Failed to fetch weather data:', error);
-        console.error('API URL was:', `https://api.weatherapi.com/v1/forecast.json?key=${WEATHER_API_KEY}&q=${userLocation.lat},${userLocation.lng}&days=1&aqi=no&alerts=yes`);
-
-        setWeather({
-          temp: 28,
-          condition: 'Data Unavailable',
-          humidity: 65,
-          windSpeed: 12,
-          feelsLike: 30
-        });
-        setWeatherAlerts([]);
       }
-    };
-
-    if (isOnline) {
-      fetchWeather();
-      const interval = setInterval(fetchWeather, 300000); // Update every 5 minutes
-      return () => clearInterval(interval);
-    } else {
+    } catch (error) {
+      console.error('Failed to fetch weather data:', error);
       setWeather({
         temp: 28,
-        condition: 'Offline Mode',
+        condition: 'Partly Cloudy',
         humidity: 65,
         windSpeed: 12,
         feelsLike: 30
       });
+      setWeatherAlerts([]);
     }
-  }, [userLocation, isOnline, WEATHER_API_KEY]);
+  };
 
+  if (isOnline) {
+    fetchWeather();
+    const interval = setInterval(fetchWeather, 300000);
+    return () => clearInterval(interval);
+  } else {
+    setWeather({
+      temp: 28,
+      condition: 'Offline Mode',
+      humidity: 65,
+      windSpeed: 12,
+      feelsLike: 30
+    });
+  }
+  }, [userLocation, isOnline]);
+  
 // Initialize nearby resources when location is available
 useEffect(() => {
   const loadNearbyResources = async () => {
     if (userLocation.lat && userLocation.lng) {
-      console.log('Loading nearby emergency resources from Geoapify...');
+      console.log('Loading nearby emergency resources from OpenStreetMap...');
       
-      if (!GOOGLE_MAPS_API_KEY) {
-        // Use mock data if API key not configured
-        const mockResources = [
-          {
-            id: 1,
-            name: 'City General Hospital',
-            type: 'healthcare',
-            lat: userLocation.lat + 0.01,
-            lng: userLocation.lng + 0.01,
-            status: 'Emergency Available',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.01, userLocation.lng + 0.01)
-          },
-          {
-            id: 2,
-            name: 'Community Medical Center',
-            type: 'healthcare',
-            lat: userLocation.lat + 0.015,
-            lng: userLocation.lng - 0.005,
-            status: 'Open 24/7',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.015, userLocation.lng - 0.005)
-          },
-          {
-            id: 3,
-            name: 'District Health Clinic',
-            type: 'healthcare',
-            lat: userLocation.lat - 0.012,
-            lng: userLocation.lng + 0.018,
-            status: 'ICU Available',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat - 0.012, userLocation.lng + 0.018)
-          },
-          {
-            id: 4,
-            name: 'Central Police Station',
-            type: 'service',
-            lat: userLocation.lat - 0.008,
-            lng: userLocation.lng + 0.012,
-            status: 'On Duty',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat - 0.008, userLocation.lng + 0.012)
-          },
-          {
-            id: 5,
-            name: 'North District Police',
-            type: 'service',
-            lat: userLocation.lat + 0.013,
-            lng: userLocation.lng + 0.008,
-            status: '24/7 Active',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.013, userLocation.lng + 0.008)
-          },
-          {
-            id: 6,
-            name: 'Fire Station Alpha',
-            type: 'service',
-            lat: userLocation.lat + 0.017,
-            lng: userLocation.lng - 0.008,
-            status: 'Ready',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.017, userLocation.lng - 0.008)
-          }
-        ];
-        
-        mockResources.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
-        setNearbyResources(mockResources);
-      } else {
-        // Fetch real data from Geoapify Places API
+      try {
+        // Fetch real data from OpenStreetMap Overpass API
         const [hospitals, policeStations, fireStations, pharmacies] = await Promise.all([
           fetchNearbyPlaces(userLocation.lat, userLocation.lng, 'healthcare.hospital'),
           fetchNearbyPlaces(userLocation.lat, userLocation.lng, 'service.police'),
@@ -1311,14 +1261,23 @@ useEffect(() => {
         const allResources = [...hospitals, ...policeStations, ...fireStations, ...pharmacies];
         allResources.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
         
-        console.log('✓ All nearby resources loaded:', allResources.length);
-        setNearbyResources(allResources);
+        console.log('✓ All nearby resources loaded from OSM:', allResources.length);
+        
+        if (allResources.length > 0) {
+          setNearbyResources(allResources);
+        } else {
+          console.warn('No resources found nearby. This might be a rural area or API issue.');
+          setNearbyResources([]);
+        }
+      } catch (error) {
+        console.error('Failed to load nearby resources:', error);
+        setNearbyResources([]);
       }
     }
   };
   
   loadNearbyResources();
-}, [userLocation, GEOAPIFY_API_KEY]);
+}, [userLocation]);
 
 // Check for nearby createdEvents and send notifications
 /*******************************
@@ -1640,7 +1599,7 @@ useEffect(() => {
                 <div>
                   <p className="text-sm text-gray-600 mb-4">✓ Location access enabled</p>
                   <div className="bg-green-50 p-3 rounded-lg mb-4">
-                    <p className="text-xs text-green-800 font-medium">📍 Current Location:</p>
+                    <p className="text-xs text-green-800 font-medium"> Current Location:</p>
                     <p className="text-sm text-green-900 mt-1">Latitude: {userLocation.lat.toFixed(6)}</p>
                     <p className="text-sm text-green-900">Longitude: {userLocation.lng.toFixed(6)}</p>
                   </div>
@@ -1982,9 +1941,24 @@ useEffect(() => {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; OpenStreetMap'
               />
-              <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-                <Popup>Your Location</Popup>
-              </Marker>
+{/* User location with navigation icon */}
+              <Marker 
+              position={[userLocation.lat, userLocation.lng]} 
+              icon={L.divIcon({
+                className: 'custom-location-marker',
+                  html: `<div style="position: relative; width: 20px; height: 40px;">
+                    <div style="background: #3B82F6; width: 40px; height: 40px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="white" style="transform: rotate(45deg); margin-top: -2px; margin-left: 0px;">
+                        <circle cx="12" cy="12" r="5" fill="white"/>
+                    </svg>
+                  </div>
+                </div>`,
+                iconSize: [40, 48],
+                iconAnchor: [20, 44],
+              })}
+            >
+              <Popup> Your Location</Popup>
+            </Marker>
               <Circle center={[userLocation.lat, userLocation.lng]} radius={10000} color="#DC2626" fillOpacity={0.1} />
             </MapContainer>
             <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-[1000]">
@@ -2561,8 +2535,34 @@ if (currentScreen === 'navigation' && selectedResource) {
                 </div>
               )}
 
-              {/* VOLUNTEERS + RESPOND BUTTON (moved below description) */}
-              <div className="flex items-center justify-between mt-2">
+ {/* TABS: Updates | Chat | Media */}
+              <div className="mt-3 flex justify-center">
+                <div className="inline-flex rounded-lg p-1 bg-black">
+                  <button
+                    onClick={() => setActiveEventTab('updates')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'updates' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Updates
+                  </button>
+
+                  <button
+                    onClick={() => setActiveEventTab('chat')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'chat' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Chat ({(chatMessages[selectedEvent.id] || []).length})
+                  </button>
+
+                  <button
+                    onClick={() => setActiveEventTab('media')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'media' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Media ({(selectedEvent.mediaFiles || []).length})
+                  </button>
+                </div>
+              </div>
+
+              {/* VOLUNTEERS + RESPOND BUTTON (now below tabs) */}
+              <div className="flex items-center justify-between mt-3">
                 <div className="bg-white rounded-lg p-3 text-gray-900 flex items-center gap-2 flex-1">
                   <Users className="w-5 h-5 text-blue-500" />
                   <span className="font-bold">
@@ -2571,80 +2571,59 @@ if (currentScreen === 'navigation' && selectedResource) {
                 </div>
 
                 <div className="flex gap-2">
-  <button 
-  onClick={async () => {
-    console.log('Fetching route from', userLocation, 'to', selectedEvent);
-    
-    try {
-      const routeCoords = await fetchRoute(
-        userLocation.lat, 
-        userLocation.lng, 
-        selectedEvent.lat, 
-        selectedEvent.lng
-      );
-      
-      console.log('Route fetched:', routeCoords.length, 'coordinates');
-      
-      if (routeCoords.length > 0) {
-        setEmergencyRoutes([{ 
-          resource: selectedEvent, 
-          route: routeCoords 
-        }]);
-        setShowEmergencyRoutes(true);
-      } else {
-        alert('Could not fetch route. Using direct line.');
-        setEmergencyRoutes([{
-          resource: selectedEvent,
-          route: [[userLocation.lat, userLocation.lng], [selectedEvent.lat, selectedEvent.lng]]
-        }]);
-        setShowEmergencyRoutes(true);
-      }
-    } catch (err) {
-      console.error('Route fetch error:', err);
-      alert('Failed to fetch route');
-    }
-  }}
-  className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600"
->
-  <MapPin className="w-5 h-5" />
-</button>
-	  
-  <button 
-    onClick={() => {
-      setSelectedResource(selectedEvent);
-      setCurrentScreen('navigation');
-    }}
-    className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition-colors"
-  >
-    <Navigation className="w-5 h-5" />
-  </button>
-</div>
-
-              {/* TABS: Updates | Chat | Media (black background, unselected text white) */}
-              <div className="mt-3 rounded-lg p-1 bg-black">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setActiveEventTab('updates')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'updates' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  <button 
+                    onClick={async () => {
+                      console.log('Fetching route from', userLocation, 'to', selectedEvent);
+                      
+                      try {
+                        const routeCoords = await fetchRoute(
+                          userLocation.lat, 
+                          userLocation.lng, 
+                          selectedEvent.lat, 
+                          selectedEvent.lng
+                        );
+                        
+                        console.log('Route fetched:', routeCoords.length, 'coordinates');
+                        
+                        if (routeCoords.length > 0) {
+                          setEmergencyRoutes([{ 
+                            resource: selectedEvent, 
+                            route: routeCoords 
+                          }]);
+                          setShowEmergencyRoutes(true);
+                        } else {
+                          alert('Could not fetch route. Using direct line.');
+                          setEmergencyRoutes([{
+                            resource: selectedEvent,
+                            route: [[userLocation.lat, userLocation.lng], [selectedEvent.lat, selectedEvent.lng]]
+                          }]);
+                          setShowEmergencyRoutes(true);
+                        }
+                      } catch (err) {
+                        console.error('Route fetch error:', err);
+                        alert('Failed to fetch route');
+                      }
+                    }}
+                    className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600"
                   >
-                    Updates
+                    <MapPin className="w-5 h-5" />
                   </button>
-
-                  <button
-                    onClick={() => setActiveEventTab('chat')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'chat' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  
+                  <button 
+                    onClick={() => {
+                      setSelectedResource(selectedEvent);
+                      setCurrentScreen('navigation');
+                    }}
+                    className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition-colors"
                   >
-                    Chat ({(chatMessages[selectedEvent.id] || []).length})
-                  </button>
-
-                  <button
-                    onClick={() => setActiveEventTab('media')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'media' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
-                  >
-                    Media ({(selectedEvent.mediaFiles || []).length})
+                    <Navigation className="w-5 h-5" />
                   </button>
                 </div>
               </div>
+
+            {/* Keep the rest of the tabs code below unchanged */}
+          <div className="mt-3 flex justify-center" style={{display: 'none'}}>
+
             </div>
           </div>
 
@@ -3484,8 +3463,22 @@ if (currentScreen === 'navigation' && selectedResource) {
             style={{ height: '100%', width: '100%' }}
           >
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-              <Popup>Your Location</Popup>
+            <Marker 
+              position={[userLocation.lat, userLocation.lng]} 
+              icon={L.divIcon({
+                className: 'custom-location-marker',
+                  html: `<div style="position: relative; width: 20px; height: 40px;">
+                    <div style="background: #3B82F6; width: 40px; height: 40px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="white" style="transform: rotate(45deg); margin-top: -2px; margin-left: 0px;">
+                        <circle cx="12" cy="12" r="5" fill="white"/>
+                    </svg>
+                  </div>
+                </div>`,
+                iconSize: [40, 48],
+                iconAnchor: [20, 44],
+              })}
+            >
+              <Popup> Your Location</Popup>
             </Marker>
 	{[...createdEvents]
         	      .filter(event => {
@@ -3578,27 +3571,49 @@ if (currentScreen === 'navigation' && selectedResource) {
               style={{ height: '100%', width: '100%' }}
             >
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-                <Popup>Your Location</Popup>
+              <Marker 
+                position={[userLocation.lat, userLocation.lng]} 
+                icon={L.divIcon({
+                  className: 'custom-location-marker',
+                  html: `<div style="position: relative; width: 20px; height: 40px;">
+                    <div style="background: #3B82F6; width: 40px; height: 40px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="white" style="transform: rotate(45deg); margin-top: -2px; margin-left: 0px;">
+                        <circle cx="12" cy="12" r="5" fill="white"/>
+                      </svg>
+                    </div>
+                  </div>`,
+                  iconSize: [40, 48],
+                  iconAnchor: [20, 44],
+                })}
+              >
+                <Popup> Your Location</Popup>
               </Marker>
               {nearbyResources.map(resource => (
-                <Marker 
-                  key={resource.id} 
-                  position={[resource.lat, resource.lng]} 
-      icon={createCustomIcon(
-        resource.type === 'healthcare' ? '#DC2626' :
-        resource.type === 'service' && resource.name.includes('Police') ? '#2563EB' :
-        resource.type === 'service' && resource.name.includes('Fire') ? '#F59E0B' :
-        '#16A34A'
-  )}
-                >
-                  <Popup>
-                    <strong>{resource.name}</strong><br />
-                    {resource.distance} km away<br />
-                    Status: {resource.status}
-                  </Popup>
-                </Marker>
-              ))}
+              <Marker 
+                key={resource.id}
+                position={[resource.lat, resource.lng]} 
+                icon={createCustomIcon(
+                  resource.type === 'healthcare' ? '#DC2626' :
+                  resource.type === 'service' && resource.name.includes('Police') ? '#2563EB' :
+                  resource.type === 'service' && resource.name.includes('Fire') ? '#F59E0B' :
+                  '#16A34A'
+                )}
+              >
+                <Popup>
+                  <strong>{resource.name}</strong><br />
+                  {resource.distance} km away<br />
+                  Status: {resource.status}
+                </Popup>
+              </Marker>
+            ))}
+
+            {/* Only show route for selected resource */}
+            {selectedResource && (
+              <RouteDisplay 
+                start={[userLocation.lat, userLocation.lng]} 
+                end={[selectedResource.lat, selectedResource.lng]} 
+              />
+            )}
               <Circle center={[userLocation.lat, userLocation.lng]} radius={2000} color="#3B82F6" fillOpacity={0.05} />
 		{/* Show emergency routes on map */}
 		{showEmergencyRoutes && emergencyRoutes.map((item, idx) => (
@@ -3718,7 +3733,7 @@ if (currentScreen === 'navigation' && selectedResource) {
             
             <div className="space-y-4 mb-6">
               <div className="flex items-start gap-3 p-3 bg-green-50 rounded-lg">
-                <div className="text-green-600 text-xl">✓</div>
+                <div className="text-green-600 text-xl"></div>
                 <div>
                   <p className="font-medium text-green-900">Emergency Alerts</p>
                   <p className="text-xs text-green-700">Get notified about nearby emergencies</p>
@@ -3726,7 +3741,7 @@ if (currentScreen === 'navigation' && selectedResource) {
               </div>
               
               <div className="flex items-start gap-3 p-3 bg-blue-50 rounded-lg">
-                <div className="text-blue-600 text-xl">🔔</div>
+                <div className="text-blue-600 text-xl"></div>
                 <div>
                   <p className="font-medium text-blue-900">Weather Warnings</p>
                   <p className="text-xs text-blue-700">Receive severe weather alerts</p>
@@ -3734,7 +3749,7 @@ if (currentScreen === 'navigation' && selectedResource) {
               </div>
               
               <div className="flex items-start gap-3 p-3 bg-purple-50 rounded-lg">
-                <div className="text-purple-600 text-xl">📍</div>
+                <div className="text-purple-600 text-xl"></div>
                 <div>
                   <p className="font-medium text-purple-900">Location Updates</p>
                   <p className="text-xs text-purple-700">Updates when help is nearby</p>
@@ -4120,63 +4135,29 @@ const BottomNav = ({ currentScreen, setCurrentScreen }) => (
 );
 
 const RouteDisplay = ({ start, end }) => {
-  const [route, setRoute] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
+  const [route, setRoute] = useState([]);
   const map = useMap();
 
-  React.useEffect(() => {
-    const loadRoute = async () => {
-      setLoading(true);
-      try {
-        const coords = await fetchRoute(start[0], start[1], end[0], end[1]);
-        console.log('Route loaded:', coords.length, 'points');
-        setRoute(coords);
-        
-        if (coords.length > 2) {
-          const bounds = L.latLngBounds(coords);
-          map.fitBounds(bounds, { padding: [50, 50] });
-        }
-      } catch (err) {
-        console.error('Route loading error:', err);
-      } finally {
-        setLoading(false);
+  useEffect(() => {
+    if (!start || !end) return;
+
+    const getRoute = async () => {
+      const coords = await fetchRoute(start[0], start[1], end[0], end[1]);
+      setRoute(coords);
+
+      if (coords.length > 2 && map) {
+        const bounds = L.latLngBounds(coords);
+        map.fitBounds(bounds, { padding: [50, 50] });
       }
     };
 
-    loadRoute();
-  }, [start[0], start[1], end[0], end[1], map]);
+    getRoute();
+  }, [start, end, map]);
 
-  if (loading) {
-    return (
-      <Circle 
-        center={start} 
-        radius={100} 
-        color="#3B82F6" 
-        fillOpacity={0.3}
-      />
-    );
-  }
+  if (route.length < 2) return null;
 
-  if (route.length === 0) return null;
-
-  return (
-    <>
-      <Polyline 
-        positions={route} 
-        color="#3B82F6" 
-        weight={4}
-        dashArray="10, 5"
-      />
-      <Marker position={start} icon={createCustomIcon('#3B82F6')}>
-        <Popup>Start</Popup>
-      </Marker>
-      <Marker position={end} icon={createCustomIcon('#DC2626')}>
-        <Popup>Destination</Popup>
-      </Marker>
-    </>
-  );
+  return <Polyline positions={route} color="#10B981" weight={5} opacity={0.8} />;
 };
-
 
 {/* ================ AudioBubble component ================ */}
 const AudioBubble = ({ url, isMine }) => {
