@@ -1791,7 +1791,7 @@ useEffect(() => {
         )}
 
         <div className="p-4 space-y-4 pb-24">
-          <button onClick={() => setCurrentScreen('createEvent')} className="w-full bg-red-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
+          <button onClick={() => setCurrentScreen('createEvent')} className="w-full bg-green-600 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
             <div className="flex items-center gap-3">
               <PlusCircle className="w-5 h-5" />
               <span className="font-medium">Add Event</span>
@@ -2187,17 +2187,6 @@ if (currentScreen === "requestForm") {
   );
 }
 
-/*******************************
- * REQUEST LIST SCREEN
- *******************************/
-
-
-
-
-/*******************************
- * REQUEST LIST SCREEN
- *******************************/
-
 /* Load resource requests globally */
 
 if (currentScreen === "requestList") {
@@ -2400,9 +2389,8 @@ if (currentScreen === 'navigation' && selectedResource) {
   if (currentScreen === "eventDetail" && selectedEvent) {
     const isCreator = createdEvents.some((e) => e.id === selectedEvent.id);
 
-    // Add tab state at top of component if missing
 
-    // 🔥 Firestore Live Chat Listener
+    //  Firestore Live Chat Listener
 
     // Reverse geocode helper for full address
     const fetchExactAddress = async (lat, lng) => {
@@ -2569,8 +2557,46 @@ if (currentScreen === 'navigation' && selectedResource) {
                     {eventVolunteers[selectedEvent.id] || 0} Volunteer{(eventVolunteers[selectedEvent.id] || 0) !== 1 ? 's' : ''} Responding
                   </span>
                 </div>
-
-                <div className="flex gap-2">
+                  <button
+                  onClick={() => {
+                    const isAlreadyResponding = userRespondingTo.includes(selectedEvent.id);
+                    
+                    if (!isAlreadyResponding) {
+                      setUserRespondingTo(prev => [...prev, selectedEvent.id]);
+                      setEventVolunteers(prev => ({
+                        ...prev,
+                        [selectedEvent.id]: (prev[selectedEvent.id] || 0) + 1
+                      }));
+                      
+                      const newActivity = {
+                        id: `response_${Date.now()}`,
+                        type: selectedEvent.type,
+                        desc: `${selectedEvent.location} - Responded as Volunteer`,
+                        time: `Attended at ${new Date().toLocaleTimeString()}`,
+                        date: new Date().toLocaleDateString('en-GB'),
+                        role: 'Volunteer'
+                      };
+                      setUserActivities(prev => [newActivity, ...prev]);
+                      
+                      alert('You are now responding to this event!');
+                    } else {
+                      setUserRespondingTo(prev => prev.filter(id => id !== selectedEvent.id));
+                      setEventVolunteers(prev => ({
+                        ...prev,
+                        [selectedEvent.id]: Math.max(0, (prev[selectedEvent.id] || 0) - 1)
+                      }));
+                      alert('You have withdrawn your response.');
+                    }
+                  }}
+                  className={`ml-2 ${
+                    userRespondingTo.includes(selectedEvent.id)
+                      ? 'bg-gray-500'
+                      : 'bg-green-500'
+                  } text-white px-4 py-2 rounded-lg font-semibold`}
+                >
+                  {userRespondingTo.includes(selectedEvent.id) ? '✓ Responding' : 'Respond'}
+                </button>
+                <div className="flex gap-2 ml-2">
                   <button 
                     onClick={async () => {
                       console.log('Fetching route from', userLocation, 'to', selectedEvent);
@@ -3265,12 +3291,11 @@ if (currentScreen === 'navigation' && selectedResource) {
           <button
             onClick={async () => {
               console.log("FILES TO UPLOAD:", newEventForm.mediaFiles);
-              // 1️⃣ Upload files first
+              
+              // Upload files first
               const uploadedMedia = [];
-
               for (const media of newEventForm.mediaFiles) {
-                if (!media.file) continue; // skip if file missing
-
+                if (!media.file) continue;
                 const uploaded = await uploadFile(media.file);
                 if (uploaded) {
                   uploadedMedia.push({
@@ -3282,7 +3307,7 @@ if (currentScreen === 'navigation' && selectedResource) {
                 }
               }
 
-              // 2️⃣ Build event object to store in Firestore
+              // Build event object
               const newEventData = {
                 type: newEventForm.incidentType,
                 location: newEventForm.location,
@@ -3300,59 +3325,58 @@ if (currentScreen === 'navigation' && selectedResource) {
                 createdAt: serverTimestamp(),
               };
 
-              // 3️⃣ Save to Firestore
+              // Save to Firestore
               const docRef = await addDoc(collection(db, "createdEvents"), newEventData);
-
-              // 4️⃣ Add Firestore ID
               const eventWithId = { ...newEventData, id: docRef.id };
 
-              // 5️⃣ Save locally
+              // ADD THIS: Track activity locally
+              const newActivity = {
+                id: docRef.id,
+                type: newEventForm.incidentType,
+                desc: `${newEventForm.location}`,
+                time: `Created at ${new Date().toLocaleTimeString()}`,
+                date: new Date().toLocaleDateString('en-GB'),
+                role: 'Creator'
+              };
+              setUserActivities(prev => [newActivity, ...prev]);
+
+              // Save locally
               setCreatedEvents((prev) => [eventWithId, ...prev]);
 
-              // 6️⃣ Navigate to detail
+              // Navigate to detail
               setSelectedEvent(eventWithId);
               setCurrentScreen("eventDetail");
-              // Request notification permission for nearby createdEvents
-              if (Notification.permission === 'default') {
-                Notification.requestPermission().then(permission => {
-                  if (permission === 'granted') {
-                    LocalNotifications.schedule({
-                      notifications: [
-                        {
-                          title: "Event Created",
-                          body: "Your event has been created successfully!",
-                          id: Date.now(),
-                          schedule: { at: new Date(Date.now() + 1000) },
-                          sound: null,
-                          attachments: null,
-                          actionTypeId: "",
-                          extra: null
-                        }
-                      ]
-                    });
-                  }
+
+              // Notification
+              if (Notification.permission === 'granted') {
+                LocalNotifications.schedule({
+                  notifications: [
+                    {
+                      title: "Event Created",
+                      body: "Your event has been created successfully!",
+                      id: Date.now(),
+                      schedule: { at: new Date(Date.now() + 1000) },
+                      sound: null,
+                      attachments: null,
+                      actionTypeId: "",
+                      extra: null
+                    }
+                  ]
                 });
               }
               
               alert('Event created successfully!');
-              // Clear the form after successful event creation
+              
+              // Clear form
               setNewEventForm({
-                type: "",
-                time: "",
+                incidentType: "",
                 location: "",
-                emergencyServiceStatus: "",
-                volunteersNeeded: "",
+                volunteersNeeded: 1,
                 suppliesNeeded: "",
+                emergencyServiceStatus: "Not Arrived",
                 mediaFiles: []
               });
-
               setMediaFiles([]);
-
-              const photoInput = document.getElementById("createEventPhotoInput");
-              if (photoInput) photoInput.value = "";
-
-              const videoInput = document.getElementById("createEventVideoInput");
-              if (videoInput) videoInput.value = "";
             }}
             className="w-full bg-red-600 text-white rounded-xl p-4 text-lg font-semibold"
           >
