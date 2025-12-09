@@ -15,8 +15,11 @@ check the above uploaded files for the Android APK
 Vercel and Android deployment - Soumika
 
 ---
+
 On Android, every time you open the app, tap the map icon and press “Grant Permission” on the pop-up to allow location access.
+
 ---
+
 ## 🚨 Important Notice
 
 Please contact emergency services **only in genuine emergency situations**.
