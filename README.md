@@ -11,12 +11,16 @@ Karthiga, Soumika, Vibhaa
 
 Deployment: https://reach-hfd.vercel.app/ <br>
 check the above uploaded files for the Android APK
-
-Vercel and Android deployment - Soumika
-
----
-
 On Android, every time you open the app, tap the map icon and press “Grant Permission” on the pop-up to allow location access.
+
+## Contributions
+
+| Member     | Key Responsibilities                                      
+|------------|-----------------------------------------------------------
+| Soumika    | Frontend UI/UX, React frontend, Firebase integration,TailwindCSS, Vercel deployment, Android APK 
+| Karthiga   | Frontend UI/UX, React frontend, Google Maps integration, AI incident summarization and fake media detection
+| Vibhaa     | LLM prompt engineering, AI fake media detection    
+Check the reach_llm folder for llm files
 
 ---
 
@@ -40,7 +44,7 @@ Before you begin, ensure you have the following installed on your system:
 
 ### Step 1: Clone the Repository
 ```bash
-git clone 
+git clone https://github.com/soumika20/hfd.git
 cd hfd
 ```
 
