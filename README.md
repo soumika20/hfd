@@ -12,6 +12,7 @@ Karthiga, Soumika, Vibhaa
 Deployment: https://reach-hfd.vercel.app/ <br>
 check the above uploaded files for the Android APK
 On Android, every time you open the app, tap the map icon and press “Grant Permission” on the pop-up to allow location access.
+Check the reach_llm folder for llm files
 
 ## Contributions
 
@@ -20,8 +21,6 @@ On Android, every time you open the app, tap the map icon and press “Grant Per
 | Soumika    | Frontend UI/UX, React frontend, Firebase integration,TailwindCSS, Vercel deployment, Android APK 
 | Karthiga   | Frontend UI/UX, React frontend, Google Maps integration, AI incident summarization and fake media detection
 | Vibhaa     | LLM prompt engineering, AI fake media detection    
-Check the reach_llm folder for llm files
-
 ---
 
 ## 🚨 Important Notice
