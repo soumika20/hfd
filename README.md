@@ -28,14 +28,15 @@ This platform is a prototype and has been done as a course project (ED3010 - Hum
 
 ---
 
-## Instructions to Setup & Run Locally (Step-by-Step)
+## Getting Started - Local Development Setup
 
 Follow these instructions to run the project on your laptop.
 
-### Prerequisites
-- Node.js (v14 or higher) + npm
-- VS Code (recommended)
-- Google Account (for Google Maps API Key)
+Before you begin, ensure you have the following installed on your system:
+- **Node.js** (v14 or higher) - [Download here](https://nodejs.org/)
+- **npm** (comes with Node.js) or **yarn**
+- **Git** - [Download here](https://git-scm.com/)
+- **Visual Studio Code** (recommended) - [Download here](https://code.visualstudio.com/)
 
 ### Step 1: Clone the Repository
 ```bash
@@ -65,53 +66,8 @@ This will install all required packages including:
 - `@capacitor/push-notifications` - Push notifications
 - `@capacitor/local-notifications` - Local notifications
 
-### 4. Set Up Environment Variables
 
-Create a `.env.local` file in the root directory:
-```bash
-touch .env.local
-```
-
-Add the following environment variables (replace with your actual API keys):
-```env
-REACT_APP_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
-REACT_APP_WEATHER_API_KEY=your_weather_api_key_here
-REACT_APP_GEOAPIFY_API_KEY=your_geoapify_api_key_here
-```
-
-**How to get API keys:**
-- **Google Maps API**: Go to [Google Cloud Console](https://console.cloud.google.com/) → Enable Maps JavaScript API & Directions API
-- **Weather API**: Sign up at [OpenWeatherMap](https://openweathermap.org/api) (or the app uses Open-Meteo which requires no key)
-- **Geoapify API**: Sign up at [Geoapify](https://www.geoapify.com/)
-
-### 5. Configure Firebase
-
-The app uses Firebase for backend services. Update the Firebase configuration in `src/App.js` (around line 747):
-```javascript
-const firebaseConfig = {
-  apiKey: "YOUR_FIREBASE_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.firebasestorage.app",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID",
-  measurementId: "YOUR_MEASUREMENT_ID"
-};
-```
-
-**To get Firebase credentials:**
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Create a new project or select existing one
-3. Go to Project Settings > General > Your apps
-4. Click "Add app" or select existing web app
-5. Copy the configuration object
-
-**Set up Firebase services:**
-1. **Firestore Database**: Enable in Firebase Console
-2. **Storage**: Enable in Firebase Console
-3. **Authentication**: Enable Anonymous authentication
-
-### 6. Run the Development Server
+### 4. Run the Development Server
 
 Start the app in development mode:
 ```bash
@@ -125,7 +81,7 @@ The app will open automatically in your browser at `http://localhost:3000`
 - Home screen with emergency services options
 - Map showing your current location (after granting permission)
 
-### 7. Build for Production
+### 5. Build for Production
 
 To create an optimized production build:
 ```bash
@@ -134,38 +90,6 @@ npm run build
 
 This creates a `build` folder with production-ready files.
 
-### 8. Deploy to Firebase Hosting (Optional)
-
-Install Firebase CLI globally:
-```bash
-npm install -g firebase-tools
-```
-
-Login to Firebase:
-```bash
-firebase login
-```
-
-
-Initialize Firebase in your project:
-```bash
-firebase init
-```
-
-Select:
-- **Hosting** (use spacebar to select)
-- Choose your Firebase project
-- Set `build` as your public directory
-- Configure as single-page app: **Yes**
-- Don't overwrite `index.html`
-
-Deploy to Firebase:
-```bash
-npm run build
-firebase deploy
-```
-
-Your app will be live at `https://your-project.firebaseapp.com`
 
 ## Available Scripts
 
@@ -203,11 +127,6 @@ npx kill-port 3000
 # Or run on different port
 PORT=3001 npm start
 ```
-
-### Firebase Connection Issues
-- Verify your Firebase config is correct
-- Check Firebase console for service status
-- Ensure Firestore rules allow read/write for development
 
 ### Location Not Working
 - Grant browser location permissions
