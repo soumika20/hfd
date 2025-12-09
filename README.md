@@ -120,6 +120,37 @@ reach_emergency_ai_dispatch/
 └── package.json        # Dependencies and scripts
 ```
 
+## Getting Started with the Reach LLM project
+
+### Step 1: Install Dependencies (If Not Done)
+
+In your terminal (Command Prompt or VS Code integrated terminal):
+```bash
+npm install
+```
+
+* This installs React, TypeScript, Vite, and other packages from package.json.
+* If it fails (e.g., due to cache), try: `npm install --legacy-peer-deps` or clear cache: `npm cache clean --force`.
+
+### Step 2: Run the Development Server
+
+Instead of npm start, use:
+```bash
+npm run dev
+```
+
+* **What happens:** Vite starts a hot-reloading server (faster than CRA). It auto-compiles TypeScript to JS in the background.
+* **Output:** Something like:
+```text
+VITE v5.x.x  ready in xxx ms
+
+➜  Local:   http://localhost:5173/
+➜  Network: use --host to expose
+➜  press h to show help
+```
+
+* Open the URL (e.g., http://localhost:5173) in your browser. Your app should load!
+
 
 ## Troubleshooting
 
