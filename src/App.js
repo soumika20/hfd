@@ -189,6 +189,8 @@ const App = () => {
   const [showEmergencyRoutes, setShowEmergencyRoutes] = useState(false);
   const typingTimeoutRef = useRef(null);
   const [isTyping, setIsTyping] = useState(false);
+  // Resource filter for Nearby Resources screen (All / Healthcare / Police / Fire / Pharmacy)
+  const [resourceFilter, setResourceFilter] = useState('all');
 
   const [activeEventTab, setActiveEventTab] = useState('updates');
   const [eventUpdates, setEventUpdates] = useState({});
@@ -3612,19 +3614,36 @@ if (currentScreen === 'navigation' && selectedResource) {
               >
                 <Popup> Your Location</Popup>
               </Marker>
-              {nearbyResources.map(resource => (
+              {nearbyResources
+  .filter(r =>
+    resourceFilter === 'all' ? true :
+    resourceFilter === 'healthcare' ? r.type === 'healthcare' :
+    resourceFilter === 'police' ? (r.type === 'service' && /police/i.test(r.name)) :
+    resourceFilter === 'fire' ? (r.type === 'service' && /fire/i.test(r.name)) :
+    resourceFilter === 'pharmacy' ? (r.type === 'pharmacy' || r.category === 'pharmacy') :
+    true
+  )
+  .map(resource => (
               <Marker 
                 key={resource.id}
                 position={[resource.lat, resource.lng]} 
                 icon={createCustomIcon(
-                  resource.type === 'healthcare' ? '#DC2626' :
-                  resource.type === 'service' && resource.name.includes('Police') ? '#2563EB' :
-                  resource.type === 'service' && resource.name.includes('Fire') ? '#F59E0B' :
-                  '#16A34A'
+                  resource.type === 'healthcare' ? '#DC2626' :                       // Hospitals: red
+                  (resource.type === 'service' && /police/i.test(resource.name)) ? '#2563EB' : // Police: blue
+                  (resource.type === 'service' && /fire/i.test(resource.name)) ? '#F59E0B' :   // Fire: orange
+                  (resource.type === 'pharmacy' || resource.category === 'pharmacy') ? '#8B5CF6' : // Pharmacy: purple
+                  '#16A34A' // default: green (other resources)
                 )}
               >
                 <Popup>
-                  <strong>{resource.name}</strong><br />
+                <strong>
+  {resource.type === 'healthcare' ? '🏥 ' :
+   (resource.type === 'service' && /police/i.test(resource.name)) ? '👮 ' :
+   (resource.type === 'service' && /fire/i.test(resource.name)) ? '🔥 ' :
+   (resource.type === 'pharmacy' || resource.category === 'pharmacy') ? '💊 ' :
+   '📍 '}
+  {resource.name}
+</strong><br />
                   {resource.distance} km away<br />
                   Status: {resource.status}
                 </Popup>
@@ -3651,8 +3670,38 @@ if (currentScreen === 'navigation' && selectedResource) {
             </MapContainer>
           </div>
           <div className="p-4 space-y-3 pb-24">
+            {/* Resource Category Tabs */}
+<div className="flex gap-2 mb-3 overflow-x-auto">
+  {[
+    { key: 'all', label: 'All', icon: '📍' },
+    { key: 'healthcare', label: 'Hospitals', icon: '🏥' },
+    { key: 'police', label: 'Police', icon: '👮' },
+    { key: 'fire', label: 'Fire', icon: '🔥' },
+    { key: 'pharmacy', label: 'Pharmacy', icon: '💊' }
+  ].map(tab => (
+    <button
+      key={tab.key}
+      onClick={() => setResourceFilter(tab.key)}
+      className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1 whitespace-nowrap ${
+        resourceFilter === tab.key ? 'bg-blue-500 text-white' : 'bg-white text-gray-700 border'
+      }`}
+    >
+      <span>{tab.icon}</span>
+      <span className="ml-1">{tab.label}</span>
+    </button>
+  ))}
+</div>
             <h3 className="font-bold text-lg">Nearby Emergency Resources</h3>
-            {nearbyResources.map(resource => (
+            {nearbyResources
+  .filter(r =>
+    resourceFilter === 'all' ? true :
+    resourceFilter === 'healthcare' ? r.type === 'healthcare' :
+    resourceFilter === 'police' ? (r.type === 'service' && /police/i.test(r.name)) :
+    resourceFilter === 'fire' ? (r.type === 'service' && /fire/i.test(r.name)) :
+    resourceFilter === 'pharmacy' ? (r.type === 'pharmacy' || r.category === 'pharmacy') :
+    true
+  )
+  .map(resource => (
               <div key={resource.id} className="bg-white rounded-xl p-4 flex justify-between items-center shadow-sm">
                 <div className="flex-1">
       <div className = "flex items-center gap-2 mb-1">
