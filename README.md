@@ -34,7 +34,7 @@ Follow these instructions to run the project on your laptop.
 
 Before you begin, ensure you have the following installed on your system:
 - **Node.js** (v14 or higher) - [Download here](https://nodejs.org/)
-- **npm** (comes with Node.js) or **yarn**
+- **npm** (comes with Node.js) or **yarn** (instructions here are given for npm)
 - **Git** - [Download here](https://git-scm.com/)
 - **Visual Studio Code** (recommended) - [Download here](https://code.visualstudio.com/)
 
